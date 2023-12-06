@@ -15,12 +15,11 @@ This project is licensed under the [GPL-3.0 License](https://www.gnu.org/license
 
 ## Manual Deployment
 Take the following steps to manually deploy the required infrastructure:
-  1.  Deploy the PairDeployer contract
-  1.  Deploy the VaultDeployer contract
-  1.  Deploy the HoyuFactory contract, use the addresses of PairDeployer and VaultDeployer as parameters
-  1.  Call transferOwnership on PairDeployer, use address of HoyuFactory as parameter
-  1.  Call transferOwnership on VaultDeployer, use address of HoyuFactory as parameter
-  1.  Call setFeeTo on HoyuFactory, use own wallet address as parameter
+  1.  Deploy the HoyuPairDeployer contract
+  1.  Deploy the HoyuVaultDeployer contract
+  1.  Deploy the HoyuFactory contract, use the addresses of HoyuPairDeployer and HoyuVaultDeployer as parameters
+  1.  Call transferOwnership on HoyuPairDeployer, use address of HoyuFactory as parameter
+  1.  Call transferOwnership on HoyuVaultDeployer, use address of HoyuFactory as parameter
 
 
 ## Important Note

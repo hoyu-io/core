@@ -15,8 +15,8 @@ import {HoyuBurnRewardStore} from "./HoyuBurnRewardStore.sol";
 contract HoyuPair is ERC20, IHoyuPair {
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3 * 2 ** 16;
     uint256 public constant LP_MULTIPLIER = 2 ** 32;
-    uint256 public constant BURN_DURATION_INTERVALS = 14;
-    uint256 public constant BURN_INTERVAL_BLOCKS = 3600;
+    uint8 public constant BURN_DURATION_INTERVALS = 14;
+    uint16 public constant BURN_INTERVAL_BLOCKS = 3600;
 
     uint256 private constant SWAP_FEE_PER_MIL = 3;
 
@@ -26,13 +26,13 @@ contract HoyuPair is ERC20, IHoyuPair {
     address public immutable vault;
     address public immutable burnRewardStore;
 
-    uint256 public burnsProcessedUntil;
-    uint256 public burnReserve;
-    uint256 public totalBurnRate;
-
     uint112 private _currencyReserve;
     uint112 private _altcoinReserve;
     uint32 private _blockTimestampLast;
+
+    uint32 public burnsProcessedUntil;
+    uint256 public burnReserve;
+    uint256 public totalBurnRate;
 
     mapping(uint256 => uint256) public burnRateEndingAt;
     mapping(address => uint256) public userBurnExpiry;
@@ -46,7 +46,7 @@ contract HoyuPair is ERC20, IHoyuPair {
     mapping(address => uint256) private _userBurnStartAltcoinRewardFactor;
 
     modifier processBurns() {
-        processBurnUntilBlock(block.number);
+        processBurnUntilBlock(uint32(block.number));
         _;
     }
 
@@ -59,7 +59,6 @@ contract HoyuPair is ERC20, IHoyuPair {
     }
 
     // TODO: use lock
-    // TODO: mint fee
     // TODO: ensure first mint does not produce a price for an impossible tick
     function mint(address to) external processBurns returns (uint256 liquidity) {
         (uint112 currencyReserve, uint112 altcoinReserve,) = getReserves();
@@ -123,7 +122,7 @@ contract HoyuPair is ERC20, IHoyuPair {
     }
 
     // TODO: use lock
-    function processBurnUntilBlock(uint256 toBlock) public {
+    function processBurnUntilBlock(uint32 toBlock) public {
         if (toBlock > block.number) revert FutureBlock();
 
         if (burnsProcessedUntil >= toBlock) {
@@ -150,7 +149,7 @@ contract HoyuPair is ERC20, IHoyuPair {
             return;
         }
 
-        uint256 nextIntervalExpiry =
+        uint32 nextIntervalExpiry =
             burnsProcessedUntil - burnsProcessedUntil % BURN_INTERVAL_BLOCKS + BURN_INTERVAL_BLOCKS;
 
         while (nextIntervalExpiry < toBlock) {
@@ -190,9 +189,7 @@ contract HoyuPair is ERC20, IHoyuPair {
     }
 
     // TODO: use lock
-    function withdrawBurnProceeds() external returns (uint256 currencyAmount, uint256 altcoinAmount) {
-        processBurnUntilBlock(block.number);
-
+    function withdrawBurnProceeds() external processBurns returns (uint256 currencyAmount, uint256 altcoinAmount) {
         uint256 burnRate = userBurnRate[_msgSender()];
 
         if (burnRate == 0) {
@@ -266,7 +263,7 @@ contract HoyuPair is ERC20, IHoyuPair {
             int256 currencyAmountInOut = IntMath.sub(currencyAmountIn, currencyAmountOut);
             int256 altcoinAmountInOut = IntMath.sub(altcoinAmountIn, altcoinAmountOut);
             (uint256 currencyLiquidated, uint256 altcoinLiquidated) = IHoyuVault(vault).liquidateLoansByOffset(
-                currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, block.number
+                currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, uint32(block.number)
             );
 
             if (currencyLiquidated > 0) {
@@ -309,7 +306,7 @@ contract HoyuPair is ERC20, IHoyuPair {
         int256 altcoinAmountInOut = IntMath.sub(altcoinBalance, _altcoinReserve);
 
         (uint256 currencyLiquidated, uint256 altcoinLiquidated) = IHoyuVault(vault).liquidateLoansByOffset(
-            _currencyReserve, _altcoinReserve, currencyAmountInOut, altcoinAmountInOut, block.number
+            _currencyReserve, _altcoinReserve, currencyAmountInOut, altcoinAmountInOut, uint32(block.number)
         );
 
         // TODO: consider retrieving actual amounts again for ensured accuracy
@@ -320,10 +317,16 @@ contract HoyuPair is ERC20, IHoyuPair {
 
     // TODO: store liquidation amounts, to be used for virtual buy reserves
     // TODO: emit swap event
+    // this function depends on the calling vault to make sure that nothing else will need to be liquidated due to the price going down
     function payForLiquidation(uint112 currencyPayout) external {
         if (_msgSender() != vault) revert CallerNotVault();
 
         SafeERC20.safeTransfer(IERC20(token0), address(vault), currencyPayout);
+
+        // TODO: consider instead using previous reserves and passed values to calculate the new reserves
+        uint256 currencyBalance = IERC20(token0).balanceOf(address(this));
+        uint256 altcoinBalance = IERC20(token1).balanceOf(address(this));
+        _update(currencyBalance, altcoinBalance, _currencyReserve, _altcoinReserve);
     }
 
     function getReserves()
@@ -347,8 +350,8 @@ contract HoyuPair is ERC20, IHoyuPair {
     }
 
     function _executeBurns(
-        uint256 fromBlock,
-        uint256 toBlock,
+        uint32 fromBlock,
+        uint32 toBlock,
         uint112 currencyReserve,
         uint112 altcoinReserve
     ) private returns (uint112, uint112) {

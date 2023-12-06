@@ -18,7 +18,7 @@ library LiquidationMath {
         int256 currencyAmountInOut;
         int256 altcoinAmountInOut;
         uint256 fractionOut;
-        uint256 blockNumber;
+        uint32 blockNumber;
         uint256 interestFactor;
     }
 

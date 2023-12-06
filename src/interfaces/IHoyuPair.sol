@@ -40,8 +40,8 @@ interface IHoyuPair {
 
     function MINIMUM_LIQUIDITY() external pure returns (uint256);
     function LP_MULTIPLIER() external pure returns (uint256);
-    function BURN_DURATION_INTERVALS() external pure returns (uint256);
-    function BURN_INTERVAL_BLOCKS() external pure returns (uint256);
+    function BURN_DURATION_INTERVALS() external pure returns (uint8);
+    function BURN_INTERVAL_BLOCKS() external pure returns (uint16);
     function factory() external view returns (address);
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -51,7 +51,7 @@ interface IHoyuPair {
         external
         view
         returns (uint112 currencyReserve, uint112 altcoinReserve, uint32 blockTimestampLast);
-    function burnsProcessedUntil() external view returns (uint256 blockNumber);
+    function burnsProcessedUntil() external view returns (uint32 blockNumber);
     function burnReserve() external view returns (uint256);
     function totalBurnRate() external view returns (uint256);
     function burnRewardStore() external view returns (address);
@@ -66,7 +66,7 @@ interface IHoyuPair {
     function skim(address to) external;
     function sync() external;
 
-    function processBurnUntilBlock(uint256 toBlock) external;
+    function processBurnUntilBlock(uint32 toBlock) external;
     function withdrawBurnProceeds() external returns (uint256 currencyAmount, uint256 altcoinAmount);
     function cancelBurn(address to) external;
 

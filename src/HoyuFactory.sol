@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity =0.8.21;
 
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IHoyuFactory} from "./interfaces/IHoyuFactory.sol";
 import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
 import {IHoyuPairDeployer} from "./interfaces/IHoyuPairDeployer.sol";
 import {IHoyuVaultDeployer} from "./interfaces/IHoyuVaultDeployer.sol";
 
-contract HoyuFactory is Ownable, IHoyuFactory {
+contract HoyuFactory is IHoyuFactory {
     address private immutable _pairDeployer;
     address private immutable _vaultDeployer;
-    address public feeTo;
 
     mapping(address => mapping(address => address)) public getPair;
     address[] public allPairs;
 
+    address public hoyuToken;
+    address private immutable _creator;
+
     constructor(address pairDeployer, address vaultDeployer) {
         _pairDeployer = pairDeployer;
         _vaultDeployer = vaultDeployer;
+        _creator = msg.sender;
     }
 
     function allPairsLength() external view returns (uint256) {
@@ -42,7 +44,9 @@ contract HoyuFactory is Ownable, IHoyuFactory {
         emit PairCreated(currency, altcoin, pair, allPairs.length);
     }
 
-    function setFeeTo(address feeTo_) public onlyOwner {
-        feeTo = feeTo_;
+    function setHoyuToken(address tokenAddress) external override {
+        if (hoyuToken != address(0) || msg.sender != _creator) revert HoyuTokenSetDisallowed();
+
+        hoyuToken = tokenAddress;
     }
 }

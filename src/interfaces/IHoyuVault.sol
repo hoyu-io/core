@@ -11,7 +11,13 @@ interface IHoyuVault is IERC4626 {
     // TODO: possibly add total amout owed by all accounts
     event TakeOutLoan(address indexed sender, address indexed to, uint256 loanAmount, uint256 accountOwed);
     event RepayLoan(address indexed sender, address indexed to, uint256 repaidAmount, uint256 accountOwed);
-    // TODO: add liquidation event
+    event Liquidation(
+        uint32 indexed blockNumber,
+        uint24 indexed tickFrom,
+        uint24 indexed tickTo,
+        uint256 loansLiquidated,
+        uint256 collateralLiquidated
+    );
 
     error CallerNotPair();
     error CallerNotFactory();
@@ -25,6 +31,9 @@ interface IHoyuVault is IERC4626 {
     error InsufficientCollateralization();
     error ExcessBorrowAmount();
     error LiquidationOnSameBlock();
+    error NoClaimableCollateral();
+    error UnclaimedCollateral();
+    error LoanLiquidated();
 
     function BLOCK_INTEREST_RATE() external pure returns (uint256);
     function IMMEDIATE_INTEREST_RATE() external pure returns (uint256);
@@ -37,29 +46,37 @@ interface IHoyuVault is IERC4626 {
     function altcoin() external view returns (address);
 
     function totalLoans() external view returns (uint256);
+    function totalFactoredLoans() external view returns (uint256);
+    function maxTickWordIndex() external view returns (uint16);
+    function tickBitmap(uint16 word) external view returns (uint256);
+    function tickFactoredLoans(uint24 tick) external view returns (uint256);
+    function tickCollateral(uint24 tick) external view returns (uint256);
+    function totalClaimableCollateral() external view returns (uint256);
 
     function collateralOf(address account) external view returns (uint256);
     function loanOf(address account) external view returns (uint256);
-    function isLiquidated(address account) external view returns (bool);
+    function liquidationBlock(address account) external view returns (uint32);
+    function claimableCollateral(uint80 liquidationKey, address account) external view returns (uint256);
 
     function depositCollateral(uint256 amount, address to) external;
     function withdrawCollateral(uint256 amount, address to) external;
     function takeOutLoan(uint256 amount, address to) external;
     function repayLoan(uint256 amount, address to) external;
+    function claimLiquidatedCollateral(uint80 liquidationKey, address to) external;
 
     function liquidateLoansByOffset(
         uint112 currencyReserve,
         uint112 altcoinReserve,
         int256 currencyAmountInOut,
         int256 altcoinAmountInOut,
-        uint256 blockNumber
+        uint32 blockNumber
     ) external returns (uint256 currencyLiquidated, uint256 altcoinLiquidated);
 
     function liquidateLoansByFraction(
         uint112 currencyReserve,
         uint112 altcoinReserve,
         uint256 fractionOut,
-        uint256 blockNumber
+        uint32 blockNumber
     ) external returns (uint256 currencyLiquidated, uint256 altcoinLiquidated);
 
     function initialize(address pair) external;
