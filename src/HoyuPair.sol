@@ -17,6 +17,7 @@ contract HoyuPair is ERC20, IHoyuPair {
     uint256 public constant LP_MULTIPLIER = 2 ** 32;
     uint8 public constant BURN_DURATION_INTERVALS = 14;
     uint16 public constant BURN_INTERVAL_BLOCKS = 3600;
+    uint16 public constant VIRTUAL_OFFSETS_DECAY_BLOCKS = 300;
 
     uint256 private constant SWAP_FEE_PER_MIL = 3;
 
@@ -29,6 +30,10 @@ contract HoyuPair is ERC20, IHoyuPair {
     uint112 private _currencyReserve;
     uint112 private _altcoinReserve;
     uint32 private _blockTimestampLast;
+
+    uint112 private _virtualCurrencyOffset;
+    uint112 private _virtualAltcoinOffset;
+    uint32 private _virtualOffsetBlock;
 
     uint32 public burnsProcessedUntil;
     uint256 public burnReserve;
@@ -315,10 +320,9 @@ contract HoyuPair is ERC20, IHoyuPair {
         );
     }
 
-    // TODO: store liquidation amounts, to be used for virtual buy reserves
     // TODO: emit swap event
     // this function depends on the calling vault to make sure that nothing else will need to be liquidated due to the price going down
-    function payForLiquidation(uint112 currencyPayout) external {
+    function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 blockNumber) external {
         if (_msgSender() != vault) revert CallerNotVault();
 
         SafeERC20.safeTransfer(IERC20(token0), address(vault), currencyPayout);
@@ -327,6 +331,25 @@ contract HoyuPair is ERC20, IHoyuPair {
         uint256 currencyBalance = IERC20(token0).balanceOf(address(this));
         uint256 altcoinBalance = IERC20(token1).balanceOf(address(this));
         _update(currencyBalance, altcoinBalance, _currencyReserve, _altcoinReserve);
+
+        uint32 blocksSinceLastLiq = blockNumber - _virtualOffsetBlock;
+        if (blocksSinceLastLiq >= VIRTUAL_OFFSETS_DECAY_BLOCKS) {
+            _virtualCurrencyOffset = currencyPayout;
+            _virtualAltcoinOffset = altcoinLiquidated;
+        } else {
+            // TODO: uint112 overflow
+            uint32 remainingBlocks = VIRTUAL_OFFSETS_DECAY_BLOCKS - blocksSinceLastLiq;
+            uint112 remainingCurrencyOffset = uint112(
+                Math.mulDiv(_virtualCurrencyOffset, remainingBlocks, VIRTUAL_OFFSETS_DECAY_BLOCKS, Math.Rounding.Up)
+            );
+            uint112 remainingAltcoinOffset = uint112(
+                Math.mulDiv(_virtualAltcoinOffset, remainingBlocks, VIRTUAL_OFFSETS_DECAY_BLOCKS, Math.Rounding.Up)
+            );
+            _virtualCurrencyOffset = remainingCurrencyOffset + currencyPayout;
+            _virtualAltcoinOffset = remainingAltcoinOffset + altcoinLiquidated;
+        }
+
+        _virtualOffsetBlock = blockNumber;
     }
 
     function getReserves()
@@ -337,6 +360,16 @@ contract HoyuPair is ERC20, IHoyuPair {
         currencyReserve = _currencyReserve;
         altcoinReserve = _altcoinReserve;
         blockTimestampLast = _blockTimestampLast;
+    }
+
+    function getVirtualOffsets()
+        public
+        view
+        returns (uint112 currencyOffset, uint112 altcoinOffset, uint32 offsetBlockNumber)
+    {
+        currencyOffset = _virtualCurrencyOffset;
+        altcoinOffset = _virtualAltcoinOffset;
+        offsetBlockNumber = _virtualOffsetBlock;
     }
 
     function _update(uint256 currencyBalance, uint256 altcoinBalance, uint112, uint112) private {

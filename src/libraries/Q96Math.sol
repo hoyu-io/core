@@ -5,14 +5,16 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import "src/libraries/BitMath.sol";
 
 library Q96Math {
-    uint256 public constant ONE = 2 ** 96;
+    uint8 public constant FRACTION_BITS = 96;
+    uint8 public constant DOUBLE_FRACTION_BITS = FRACTION_BITS * 2;
+    uint256 public constant ONE = 1 << FRACTION_BITS;
 
     function asQ96(uint160 val) internal pure returns (uint256) {
-        return val * ONE;
+        return uint256(val) << FRACTION_BITS;
     }
 
     function asUint(uint256 val) internal pure returns (uint160) {
-        return uint160(val / ONE);
+        return uint160(val >> FRACTION_BITS);
     }
 
     function asUintCeil(uint256 val) internal pure returns (uint168) {

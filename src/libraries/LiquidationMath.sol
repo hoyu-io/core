@@ -4,6 +4,7 @@ pragma solidity =0.8.21;
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Q96Math} from "src/libraries/Q96Math.sol";
 import {IntMath} from "src/libraries/IntMath.sol";
+import {Factoring} from "src/libraries/Factoring.sol";
 import "src/libraries/TickMath.sol";
 import "src/libraries/LiquidatedAmounts.sol";
 
@@ -56,22 +57,20 @@ library LiquidationMath {
 
         if (currencyReserveWithOffset == 0 || altcoinReserveWithOffset == 0) revert InsufficientReserve();
 
-        uint256 price = Q96Math.div(currencyReserveWithOffset, altcoinReserveWithOffset);
-        uint256 factoredPrice = Q96Math.div(price, data.interestFactor);
+        uint256 priceQ96 = Q96Math.div(currencyReserveWithOffset, altcoinReserveWithOffset);
+        uint256 factoredPrice = Factoring.factorQ96Down(priceQ96, data.interestFactor);
         uint24 tick = priceTick(factoredPrice);
         (wordPos, bitPos) = tickToPosition(tick);
 
-        factoredLoanLimit = Q96Math.div(
-            Q96Math.asQ96(uint160(LOAN_LIMIT_PER_MIL * currencyReserveWithOffset / 1000)), data.interestFactor
-        );
+        factoredLoanLimit =
+            Factoring.factorDown(LOAN_LIMIT_PER_MIL * currencyReserveWithOffset / 1000, data.interestFactor);
     }
 
     function postLiquidationThresholds(
         ReservesChange memory data,
         LiquidatedAmounts.Amounts memory amounts
     ) internal pure returns (uint16, uint8, uint256) {
-        uint256 loansLiquidated =
-            Q96Math.asUintCeil(Q96Math.mul(amounts.factoredLoansLiquidated(), data.interestFactor));
+        uint256 loansLiquidated = Factoring.unfactorUp(amounts.factoredLoansLiquidated(), data.interestFactor);
         uint256 collateralValue = getAmountOut(amounts.collateralLiquidated, data.altcoinReserve, data.currencyReserve);
 
         uint256 currencyFromPair;

@@ -42,6 +42,7 @@ interface IHoyuPair {
     function LP_MULTIPLIER() external pure returns (uint256);
     function BURN_DURATION_INTERVALS() external pure returns (uint8);
     function BURN_INTERVAL_BLOCKS() external pure returns (uint16);
+    function VIRTUAL_OFFSETS_DECAY_BLOCKS() external pure returns (uint16);
     function factory() external view returns (address);
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -51,6 +52,10 @@ interface IHoyuPair {
         external
         view
         returns (uint112 currencyReserve, uint112 altcoinReserve, uint32 blockTimestampLast);
+    function getVirtualOffsets()
+        external
+        view
+        returns (uint112 currencyOffset, uint112 altcoinOffset, uint32 offsetBlockNumber);
     function burnsProcessedUntil() external view returns (uint32 blockNumber);
     function burnReserve() external view returns (uint256);
     function totalBurnRate() external view returns (uint256);
@@ -71,5 +76,5 @@ interface IHoyuPair {
     function cancelBurn(address to) external;
 
     // TODO: adjust to contain all information needed for swap event
-    function payForLiquidation(uint112 currencyPayout) external;
+    function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 blockNumber) external;
 }

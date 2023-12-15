@@ -36,7 +36,8 @@ interface IHoyuVault is IERC4626 {
     error LoanLiquidated();
 
     function BLOCK_INTEREST_RATE() external pure returns (uint256);
-    function IMMEDIATE_INTEREST_RATE() external pure returns (uint256);
+    function MIN_FLAT_BORROW_FEE() external pure returns (uint256);
+    function BORROW_FEE_PER_MIL() external pure returns (uint256);
     function MINIMUM_SHARES() external pure returns (uint256);
     function BORROW_LIMIT_PER_MIL() external pure returns (uint256);
     function LOAN_COLLATERALIZATION_TICK_OFFSET() external pure returns (uint24);

@@ -3,6 +3,7 @@ pragma solidity =0.8.21;
 
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Q96Math} from "src/libraries/Q96Math.sol";
+import {Factoring} from "src/libraries/Factoring.sol";
 import {ERC4626} from "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -20,10 +21,9 @@ contract HoyuVault is ERC4626, IHoyuVault {
     using LiquidationMath for LiquidationMath.ReservesChange;
     using LiquidatedAmounts for LiquidatedAmounts.Amounts;
 
-    // TODO: change from 20% yearly interest to something more reasonable
-    uint256 public constant BLOCK_INTEREST_RATE = 79228168007078404159181067972; // ~1.00000007
-    // TODO: change to a logical value eventually, currently roughly 1 day worth of interest at 20% yearly interest
-    uint256 public constant IMMEDIATE_INTEREST_RATE = 79267720646452247531225451463; // ~1.0005
+    uint256 public constant BLOCK_INTEREST_RATE = Factoring.BLOCK_INTEREST_RATE;
+    uint256 public constant MIN_FLAT_BORROW_FEE = 5000000;
+    uint256 public constant BORROW_FEE_PER_MIL = 5;
     uint256 public constant MINIMUM_SHARES = 10 ** 3;
     uint256 public constant BORROW_LIMIT_PER_MIL = 70;
     uint24 public constant LOAN_COLLATERALIZATION_TICK_OFFSET = 954; // 110% collateralization
@@ -80,7 +80,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 factoredLoan = _factoredLoanOf[borrower];
         if (factoredLoan == 0 || _isLiquidated(borrower)) return 0;
 
-        return Q96Math.asUintCeil(Q96Math.mul(factoredLoan, _interestFactor()));
+        return Factoring.unfactorUp(factoredLoan, _interestFactor());
     }
 
     function _isLiquidated(address borrower) private view returns (bool) {
@@ -118,7 +118,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 totalCurrencyLiquidated = liquidation >> 128;
         uint256 totalAltcoinLiquidated = uint128(liquidation);
 
-        uint256 owed = Q96Math.asUintCeil(Q96Math.mul(_factoredLoanOf[account], _interestFactorAt(liquidatedAt)));
+        uint256 owed = Factoring.unfactorUp(_factoredLoanOf[account], Factoring.interestFactorAt(liquidatedAt));
 
         uint256 collateralLiquidated =
             Math.mulDiv(owed, totalAltcoinLiquidated, totalCurrencyLiquidated, Math.Rounding.Up);
@@ -129,13 +129,12 @@ contract HoyuVault is ERC4626, IHoyuVault {
     }
 
     function totalLoans() public view returns (uint256) {
-        return Q96Math.asUintCeil(Q96Math.mul(totalFactoredLoans, _interestFactor()));
+        return Factoring.unfactorUp(totalFactoredLoans, _interestFactor());
     }
 
     // TODO: verify overrides are correct
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256) {
-        uint256 loanedValue = Q96Math.asUintCeil(Q96Math.mul(totalFactoredLoans, _interestFactor()));
-        return IERC20(asset()).balanceOf(address(this)) + loanedValue;
+        return IERC20(asset()).balanceOf(address(this)) + totalLoans();
     }
 
     function maxWithdraw(address owner) public view override(ERC4626, IERC4626) returns (uint256 assets) {
@@ -252,13 +251,18 @@ contract HoyuVault is ERC4626, IHoyuVault {
         if (_isLiquidated(_msgSender())) revert LoanLiquidated();
 
         if (amount == 0) revert InsufficientLoan();
-        if (IERC20(asset()).balanceOf(address(this)) < amount) revert InsufficientCurrency();
 
-        SafeERC20.safeTransfer(IERC20(asset()), to, amount);
+        uint256 borrowFee =
+            Math.max(MIN_FLAT_BORROW_FEE, Math.mulDiv(amount, BORROW_FEE_PER_MIL, 1000, Math.Rounding.Up));
+        address hoyuPair = IHoyuFactory(factory).getPair(asset(), IHoyuFactory(factory).hoyuToken());
 
-        uint256 owed = amount * IMMEDIATE_INTEREST_RATE;
+        {
+            uint256 amountFromVault = hoyuPair == address(0) ? amount : amount + borrowFee;
+            if (IERC20(asset()).balanceOf(address(this)) < amountFromVault) revert InsufficientCurrency();
+        }
+
         uint256 interestFactor = _interestFactor();
-        uint256 factoredOwed = Q96Math.ceilDiv(owed, interestFactor);
+        uint256 factoredOwed = Factoring.factorUp(amount + borrowFee, interestFactor);
         uint256 collateral = _collateralOf[_msgSender()];
 
         uint256 factoredOwedPrior = _factoredLoanOf[_msgSender()];
@@ -273,8 +277,14 @@ contract HoyuVault is ERC4626, IHoyuVault {
         }
 
         _verifyLoanHealthy(tick, interestFactor, true);
+        emit TakeOutLoan(_msgSender(), to, amount, Factoring.unfactorUp(_factoredLoanOf[_msgSender()], interestFactor));
 
-        emit TakeOutLoan(_msgSender(), to, amount, Q96Math.asUintCeil(_q96LoanOf(_msgSender(), interestFactor)));
+        if (hoyuPair != address(0)) {
+            SafeERC20.safeTransfer(IERC20(asset()), hoyuPair, borrowFee);
+            // TODO: verify if it is possible to skim before syncing
+            IHoyuPair(hoyuPair).sync();
+        }
+        SafeERC20.safeTransfer(IERC20(asset()), to, amount);
     }
 
     function repayLoan(uint256 amount, address to) external processBurns {
@@ -286,7 +296,15 @@ contract HoyuVault is ERC4626, IHoyuVault {
         SafeERC20.safeTransferFrom(IERC20(asset()), _msgSender(), address(this), amount);
 
         uint256 interestFactor = _interestFactor();
-        uint256 factoredRepayAmount = Q96Math.div(Q96Math.asQ96(uint160(amount)), interestFactor);
+
+        uint256 factoredRepayAmount;
+        // avoiding a case where factoring and unfactoring results in an insufficient full repayment
+        if (Factoring.unfactorUp(factoredOwedPrior, interestFactor) <= amount) {
+            factoredRepayAmount = factoredOwedPrior;
+        } else {
+            factoredRepayAmount = Factoring.factorDown(amount, interestFactor);
+        }
+
         uint256 collateral = _collateralOf[to];
 
         if (factoredOwedPrior > factoredRepayAmount) {
@@ -298,7 +316,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
             _removeLoan(factoredOwedPrior, collateral, to);
         }
 
-        emit RepayLoan(_msgSender(), to, amount, Q96Math.asUintCeil(_q96LoanOf(to, interestFactor)));
+        emit RepayLoan(_msgSender(), to, amount, Factoring.unfactorUp(_factoredLoanOf[to], interestFactor));
     }
 
     function claimLiquidatedCollateral(uint80 liquidationKey, address to) external {
@@ -336,7 +354,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
             altcoinAmountInOut,
             0,
             blockNumber,
-            _interestFactorAt(blockNumber)
+            Factoring.interestFactorAt(blockNumber)
         );
 
         return _liquidateLoans(reservesChange);
@@ -356,7 +374,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         }
 
         LiquidationMath.ReservesChange memory reservesChange = LiquidationMath.ReservesChange(
-            currencyReserve, altcoinReserve, 0, 0, fractionOut, blockNumber, _interestFactorAt(blockNumber)
+            currencyReserve, altcoinReserve, 0, 0, fractionOut, blockNumber, Factoring.interestFactorAt(blockNumber)
         );
 
         return _liquidateLoans(reservesChange);
@@ -444,17 +462,12 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 currencyLiquidated;
         uint256 altcoinLiquidated;
         {
-            uint256 liquidatedLoans = Q96Math.asUintCeil(
-                Q96Math.mul(liquidationAmounts.factoredLoansLiquidated(), reservesChange.interestFactor)
-            );
+            uint256 liquidatedLoans =
+                Factoring.unfactorUp(liquidationAmounts.factoredLoansLiquidated(), reservesChange.interestFactor);
             totalFactoredLoans = liquidationAmounts.remainingFactoredLoans;
 
-            (currencyLiquidated, altcoinLiquidated) = _moveLiquidationAssets(
-                reservesChange.currencyReserve,
-                reservesChange.altcoinReserve,
-                liquidationAmounts.collateralLiquidated,
-                liquidatedLoans
-            );
+            (currencyLiquidated, altcoinLiquidated) =
+                _moveLiquidationAssets(reservesChange, liquidationAmounts.collateralLiquidated, liquidatedLoans);
         }
 
         uint80 key = (uint80(reservesChange.blockNumber) << 48) + (uint48(topTick) << 24) + liquidatingTick;
@@ -465,26 +478,26 @@ contract HoyuVault is ERC4626, IHoyuVault {
         return (currencyLiquidated, altcoinLiquidated);
     }
 
-    // TODO: emit event
     function _moveLiquidationAssets(
-        uint112 currencyReserve,
-        uint112 altcoinReserve,
+        LiquidationMath.ReservesChange memory reservesChange,
         uint256 collateralLiquidated,
         uint256 liquidatedLoans
     ) private returns (uint256 pairCurrency, uint256 pairAltcoin) {
-        uint256 maxLiquidationReward =
-            LiquidationMath.getAmountOut(collateralLiquidated, altcoinReserve, currencyReserve);
+        uint256 maxLiquidationReward = LiquidationMath.getAmountOut(
+            collateralLiquidated, reservesChange.altcoinReserve, reservesChange.currencyReserve
+        );
 
         if (maxLiquidationReward <= liquidatedLoans) {
             pairCurrency = maxLiquidationReward;
             pairAltcoin = collateralLiquidated;
         } else {
             pairCurrency = liquidatedLoans;
-            pairAltcoin = LiquidationMath.getAmountIn(pairCurrency, altcoinReserve, currencyReserve);
+            pairAltcoin =
+                LiquidationMath.getAmountIn(pairCurrency, reservesChange.altcoinReserve, reservesChange.currencyReserve);
         }
 
         // TODO: avoid locking through excessive altcoin amount
-        if (pairAltcoin + altcoinReserve > type(uint112).max) revert ExcessiveAltcoinAmount();
+        if (pairAltcoin + reservesChange.altcoinReserve > type(uint112).max) revert ExcessiveAltcoinAmount();
 
         SafeERC20.safeTransfer(IERC20(altcoin), address(pair), pairAltcoin);
         if (collateralLiquidated > pairAltcoin) {
@@ -492,21 +505,13 @@ contract HoyuVault is ERC4626, IHoyuVault {
         }
 
         // TODO: consider getting rid of the cast to uint112
-        IHoyuPair(pair).payForLiquidation(uint112(pairCurrency));
+        IHoyuPair(pair).payForLiquidation(uint112(pairCurrency), uint112(pairAltcoin), reservesChange.blockNumber);
     }
 
     // TODO: save intermediate values
     // TODO: save for varying interest rate
     function _interestFactor() private view returns (uint256) {
-        return _interestFactorAt(block.number);
-    }
-
-    function _interestFactorAt(uint256 blockNumber) private pure returns (uint256 interestFactor) {
-        interestFactor = Q96Math.pow(BLOCK_INTEREST_RATE, blockNumber);
-    }
-
-    function _q96LoanOf(address borrower, uint256 interestFactor) private view returns (uint256) {
-        return Q96Math.mul(_factoredLoanOf[borrower], interestFactor);
+        return Factoring.interestFactorAt(block.number);
     }
 
     function _addLoan(uint256 factoredLoan, uint256 collateral, address borrower) private returns (uint24 tick) {
@@ -600,8 +605,8 @@ contract HoyuVault is ERC4626, IHoyuVault {
         (uint112 currencyReserve, uint112 altcoinReserve,) = IHoyuPair(pair).getReserves();
 
         if (verifyVaultHealth) {
-            uint256 totalLoans_ = Q96Math.mul(totalFactoredLoans, interestFactor, Math.Rounding.Up);
-            if (Q96Math.asUintCeil(totalLoans_) > BORROW_LIMIT_PER_MIL * currencyReserve / 1000) {
+            uint256 totalLoans_ = Factoring.unfactorUp(totalFactoredLoans, interestFactor);
+            if (totalLoans_ > BORROW_LIMIT_PER_MIL * currencyReserve / 1000) {
                 revert ExcessBorrowAmount();
             }
         }
