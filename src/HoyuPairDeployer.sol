@@ -6,6 +6,8 @@ import {HoyuPair} from "./HoyuPair.sol";
 import {IHoyuPairDeployer} from "./interfaces/IHoyuPairDeployer.sol";
 
 contract HoyuPairDeployer is Ownable, IHoyuPairDeployer {
+    constructor() Ownable(_msgSender()) {}
+
     function deploy(
         bytes32 salt,
         address currency,

@@ -49,7 +49,7 @@ library Q96Math {
     }
 
     function ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
-        return Math.mulDiv(a, Q96Math.ONE, b, Math.Rounding.Up);
+        return Math.mulDiv(a, Q96Math.ONE, b, Math.Rounding.Ceil);
     }
 
     function sqrt(uint256 val) internal pure returns (uint256 sqrt_) {

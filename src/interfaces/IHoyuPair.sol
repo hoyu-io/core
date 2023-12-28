@@ -75,6 +75,7 @@ interface IHoyuPair {
     function withdrawBurnProceeds() external returns (uint256 currencyAmount, uint256 altcoinAmount);
     function cancelBurn(address to) external;
 
-    // TODO: adjust to contain all information needed for swap event
     function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 blockNumber) external;
+    function lockAndProcessBurn() external;
+    function unlock() external;
 }

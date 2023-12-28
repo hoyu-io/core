@@ -4,13 +4,10 @@ pragma solidity =0.8.21;
 import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 interface IHoyuVault is IERC4626 {
-    event CollateralDeposit(address indexed sender, address indexed to, uint256 deposit);
-    event CollateralWithdraw(
-        address indexed sender, address indexed to, uint256 withdrawnAmount, uint256 remainingAmount
-    );
-    // TODO: possibly add total amout owed by all accounts
-    event TakeOutLoan(address indexed sender, address indexed to, uint256 loanAmount, uint256 accountOwed);
-    event RepayLoan(address indexed sender, address indexed to, uint256 repaidAmount, uint256 accountOwed);
+    event CollateralDeposit(address indexed sender, address indexed to, uint256 amount);
+    event CollateralWithdraw(address indexed sender, address indexed to, uint256 amount);
+    event Borrow(address indexed sender, address indexed to, uint256 amount);
+    event RepayBorrow(address indexed sender, address indexed to, uint256 amount);
     event Liquidation(
         uint32 indexed blockNumber,
         uint24 indexed tickFrom,
@@ -71,14 +68,14 @@ interface IHoyuVault is IERC4626 {
         int256 currencyAmountInOut,
         int256 altcoinAmountInOut,
         uint32 blockNumber
-    ) external returns (uint256 currencyLiquidated, uint256 altcoinLiquidated);
+    ) external returns (uint112 currencyLiquidated, uint112 altcoinLiquidated);
 
     function liquidateLoansByFraction(
         uint112 currencyReserve,
         uint112 altcoinReserve,
         uint256 fractionOut,
         uint32 blockNumber
-    ) external returns (uint256 currencyLiquidated, uint256 altcoinLiquidated);
+    ) external returns (uint112 currencyLiquidated, uint112 altcoinLiquidated);
 
     function initialize(address pair) external;
 }

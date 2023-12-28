@@ -15,7 +15,7 @@ library Factoring {
 
     // only to be used only with factoringMultiplier >= Q96Math.ONE
     function factorUp(uint256 amount, uint256 factoringMultiplier) internal pure returns (uint256) {
-        return Math.mulDiv(amount, 1 << Q96Math.DOUBLE_FRACTION_BITS, factoringMultiplier, Math.Rounding.Up);
+        return Math.mulDiv(amount, 1 << Q96Math.DOUBLE_FRACTION_BITS, factoringMultiplier, Math.Rounding.Ceil);
     }
 
     // only to be used only with factoringMultiplier >= Q96Math.ONE
@@ -24,7 +24,7 @@ library Factoring {
     }
 
     function factorQ96Up(uint256 amountQ96, uint256 factoringMultiplier) internal pure returns (uint256) {
-        return Math.mulDiv(amountQ96, Q96Math.ONE, factoringMultiplier, Math.Rounding.Up);
+        return Math.mulDiv(amountQ96, Q96Math.ONE, factoringMultiplier, Math.Rounding.Ceil);
     }
 
     function factorQ96Down(uint256 amountQ96, uint256 factoringMultiplier) internal pure returns (uint256) {
@@ -32,7 +32,7 @@ library Factoring {
     }
 
     function unfactorUp(uint256 factoredAmount, uint256 factoringMultiplier) internal pure returns (uint256) {
-        return Math.mulDiv(factoredAmount, factoringMultiplier, 1 << Q96Math.DOUBLE_FRACTION_BITS, Math.Rounding.Up);
+        return Math.mulDiv(factoredAmount, factoringMultiplier, 1 << Q96Math.DOUBLE_FRACTION_BITS, Math.Rounding.Ceil);
     }
 
     function unfactorDown(uint256 factoredAmount, uint256 factoringMultiplier) internal pure returns (uint256) {
