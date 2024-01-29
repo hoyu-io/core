@@ -3,17 +3,8 @@ pragma solidity =0.8.21;
 
 interface IHoyuPair {
     event Mint(address indexed sender, uint256 currencyAmount, uint256 altcoinAmount);
-    event Burn(
-        address indexed sender,
-        address indexed to,
-        uint256 burnRate,
-        uint256 burnEnd,
-        uint256 totalBurn,
-        uint256 totalBurnRate
-    );
-    event BurnCanceled(
-        address indexed sender, address indexed to, uint256 unburnedAmount, uint256 totalBurn, uint256 totalBurnRate
-    );
+    event Burn(address indexed sender, address indexed to, uint256 burnRate, uint32 burnEnd);
+    event BurnCanceled(address indexed sender, address indexed to, uint256 unburnedAmount);
     event Sync(uint112 currencyReserve, uint112 altcoinReserve);
     event Swap(
         address indexed sender,
@@ -29,7 +20,7 @@ interface IHoyuPair {
     error BurnAlreadyActive();
     error InsufficientBurnRate();
     error NoActiveBurn();
-    error FutureBlock();
+    error FutureTime();
     error InsufficientInputAmount();
     error InsufficientOutputAmount();
     error MultiOutputSwap();
@@ -40,9 +31,9 @@ interface IHoyuPair {
 
     function MINIMUM_LIQUIDITY() external pure returns (uint256);
     function LP_MULTIPLIER() external pure returns (uint256);
-    function BURN_DURATION_INTERVALS() external pure returns (uint8);
-    function BURN_INTERVAL_BLOCKS() external pure returns (uint16);
-    function VIRTUAL_OFFSETS_DECAY_BLOCKS() external pure returns (uint16);
+    function BURN_INTERVALS() external pure returns (uint8);
+    function BURN_INTERVAL_LENGTH() external pure returns (uint16);
+    function VIRTUAL_OFFSETS_DECAY_TIME() external pure returns (uint16);
     function factory() external view returns (address);
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -51,18 +42,18 @@ interface IHoyuPair {
     function getReserves()
         external
         view
-        returns (uint112 currencyReserve, uint112 altcoinReserve, uint32 blockTimestampLast);
+        returns (uint112 currencyReserve, uint112 altcoinReserve, uint32 reserveTimestampLast);
     function getVirtualOffsets()
         external
         view
-        returns (uint112 currencyOffset, uint112 altcoinOffset, uint32 offsetBlockNumber);
-    function burnsProcessedUntil() external view returns (uint32 blockNumber);
+        returns (uint112 currencyOffset, uint112 altcoinOffset, uint32 offsetTimestamp);
+    function burnsProcessedUntil() external view returns (uint32 timestamp);
     function burnReserve() external view returns (uint256);
     function totalBurnRate() external view returns (uint256);
     function burnRewardStore() external view returns (address);
-    function burnRateEndingAt(uint256 blockNumber) external view returns (uint256);
-    function userBurnExpiry(address user) external view returns (uint256 burnEndBlock);
-    function userBurnRate(address user) external view returns (uint256 ratePerBlock);
+    function burnRateEndingAt(uint32 timestamp) external view returns (uint256);
+    function userBurnExpiry(address user) external view returns (uint32 timestamp);
+    function userBurnRate(address user) external view returns (uint256 rate);
 
     function mint(address to) external returns (uint256 liquidity);
     // TODO: maybe keep the uniswap signature that returns (uint256 currencyAmount, uint256 altcoinAmount) even though immediate values are always 0 due to long burn
@@ -71,11 +62,11 @@ interface IHoyuPair {
     function skim(address to) external;
     function sync() external;
 
-    function processBurnUntilBlock(uint32 toBlock) external;
-    function withdrawBurnProceeds() external returns (uint256 currencyAmount, uint256 altcoinAmount);
+    function processBurnUntil(uint32 timestamp) external;
+    function withdrawBurnProceeds(address to) external returns (uint256 currencyAmount, uint256 altcoinAmount);
     function cancelBurn(address to) external;
 
-    function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 blockNumber) external;
+    function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 timestamp) external;
     function lockAndProcessBurn() external;
     function unlock() external;
 }

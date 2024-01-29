@@ -2,7 +2,8 @@
 pragma solidity =0.8.21;
 
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Q96Math} from "src/libraries/Q96Math.sol";
+import {Q96} from "src/libraries/Q96.sol";
+import {Q128} from "src/libraries/Q128.sol";
 import {Factoring} from "src/libraries/Factoring.sol";
 import {ERC4626} from "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
@@ -12,21 +13,21 @@ import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/Safe
 import {IHoyuPair} from "./interfaces/IHoyuPair.sol";
 import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
 import {IHoyuFactory} from "./interfaces/IHoyuFactory.sol";
-import "src/libraries/TickMath.sol";
-import "src/libraries/BitMath.sol";
-import "src/libraries/LiquidationMath.sol";
-import "src/libraries/LiquidatedAmounts.sol";
+import {TickMath} from "src/libraries/TickMath.sol";
+import {BitMath} from "src/libraries/BitMath.sol";
+import {SwapMath} from "src/libraries/SwapMath.sol";
+import {timestamp as ts} from "src/libraries/Timestamp.sol";
+import {ReservesChange, LiquidationMath} from "src/libraries/LiquidationMath.sol";
 
 contract HoyuVault is ERC4626, IHoyuVault {
-    using LiquidationMath for LiquidationMath.ReservesChange;
-    using LiquidatedAmounts for LiquidatedAmounts.Amounts;
+    using LiquidationMath for ReservesChange;
 
-    uint256 public constant BLOCK_INTEREST_RATE = Factoring.BLOCK_INTEREST_RATE;
+    uint256 public constant INTEREST_RATE = Factoring.INTEREST_RATE;
     uint256 public constant MIN_FLAT_BORROW_FEE = 5000000;
     uint256 public constant BORROW_FEE_PER_MIL = 5;
     uint256 public constant MINIMUM_SHARES = 10 ** 3;
-    uint256 public constant BORROW_LIMIT_PER_MIL = 70;
-    uint24 public constant LOAN_COLLATERALIZATION_TICK_OFFSET = 954; // 110% collateralization
+    uint256 public constant BORROW_LIMIT_PER_MIL = 100;
+    uint16 public constant LOAN_TICK_OFFSET = 41; // ~89.5% ltv
 
     address public immutable factory;
     address public immutable altcoin;
@@ -35,18 +36,18 @@ contract HoyuVault is ERC4626, IHoyuVault {
     uint256 public totalClaimableCollateral;
     uint256 public totalFactoredLoans;
 
-    uint16 public maxTickWordIndex;
-    mapping(uint16 => uint256) public tickBitmap;
-    mapping(uint24 => uint256) public tickFactoredLoans;
-    mapping(uint24 => uint256) public tickCollateral;
+    uint256 public wordBitmap;
+    mapping(uint8 => uint256) public tickBitmap;
+    mapping(uint16 => uint256) public tickFactoredLoans;
+    mapping(uint16 => uint256) public tickCollateral;
 
     mapping(address => uint256) private _collateralOf;
     mapping(address => uint256) private _factoredLoanOf;
-    mapping(address => uint32) private _userLoanBlock;
-    mapping(address => uint24) private _userLoanTick;
+    mapping(address => uint32) private _userLoanTimestamp;
+    mapping(address => uint16) private _userLoanTick;
 
-    mapping(uint24 => uint256) private _tickLiquidations;
-    mapping(uint80 => uint256) private _liquidations;
+    mapping(uint16 => uint256) private _tickLiquidations;
+    mapping(uint64 => uint256) private _liquidations;
 
     modifier processingReentrancyGuard() {
         IHoyuPair(pair).lockAndProcessBurn();
@@ -83,23 +84,22 @@ contract HoyuVault is ERC4626, IHoyuVault {
     }
 
     function _isLiquidated(address borrower) private view returns (bool) {
-        uint24 tick = _userLoanTick[borrower];
-        return tick > 0 && uint32(_tickLiquidations[tick]) >= _userLoanBlock[borrower];
+        uint32 loanTimestamp = _userLoanTimestamp[borrower];
+        return loanTimestamp > 0 && loanTimestamp <= uint32(_tickLiquidations[_userLoanTick[borrower]]);
     }
 
-    // returning 0 means loan was either not liquidated or liquidation block is no longer known
-    function liquidationBlock(address borrower) public view returns (uint32) {
-        uint24 tick = _userLoanTick[borrower];
-        uint32 loanBlock = _userLoanBlock[borrower];
-
-        uint256 tickLiquidations = _tickLiquidations[tick];
+    // returning 0 means loan was either not liquidated or liquidation timestamp is no longer known
+    function liquidationTimestamp(address borrower) public view returns (uint32) {
+        uint256 tickLiquidations = _tickLiquidations[_userLoanTick[borrower]];
         uint32 liquidationBefore = uint32(tickLiquidations >> 224);
 
+        uint32 loanTimestamp = _userLoanTimestamp[borrower];
+
         while (tickLiquidations != 0) {
-            if (liquidationBefore >= loanBlock) break;
+            if (liquidationBefore >= loanTimestamp) break;
 
             uint32 liquidationAfter = uint32(tickLiquidations >> 192);
-            if (liquidationBefore < loanBlock && loanBlock <= liquidationAfter) return liquidationAfter;
+            if (liquidationBefore < loanTimestamp && loanTimestamp <= liquidationAfter) return liquidationAfter;
 
             liquidationBefore = liquidationAfter;
             tickLiquidations <<= 32;
@@ -108,11 +108,11 @@ contract HoyuVault is ERC4626, IHoyuVault {
         return 0;
     }
 
-    function claimableCollateral(uint80 liquidationKey, address account) public view returns (uint256) {
+    function claimableCollateral(uint64 liquidationKey, address account) public view returns (uint256) {
         uint256 liquidation = _liquidations[liquidationKey];
-        uint32 liquidatedAt = uint32(liquidationKey >> 48);
+        uint32 liquidatedAt = uint32(liquidationKey >> 32);
 
-        if (liquidation == 0 || liquidatedAt == 0 || liquidatedAt != liquidationBlock(account)) return 0;
+        if (liquidation == 0 || liquidatedAt == 0 || liquidatedAt != liquidationTimestamp(account)) return 0;
 
         uint256 totalCurrencyLiquidated = liquidation >> 128;
         uint256 totalAltcoinLiquidated = uint128(liquidation);
@@ -212,9 +212,9 @@ contract HoyuVault is ERC4626, IHoyuVault {
 
     // TODO: possibly want to limit the total amount of collateral deposited, so as not to exeed 112 bit reserve limit after liquidation
     function depositCollateral(uint256 amount, address to) external processingReentrancyGuard {
-        // TODO: confirm whether it would be cheaper to just use liquidationBlock instead of _isLiquidated, reusing it inside the if
+        // TODO: confirm whether it would be cheaper to just use liquidationTimestamp instead of _isLiquidated, reusing it inside the if
         if (_isLiquidated(to)) {
-            if (_msgSender() != to && liquidationBlock(to) > 0) revert UnclaimedCollateral();
+            if (_msgSender() != to && liquidationTimestamp(to) > 0) revert UnclaimedCollateral();
             _clearLiquidatedLoan(to);
         }
 
@@ -232,7 +232,6 @@ contract HoyuVault is ERC4626, IHoyuVault {
 
         _collateralOf[to] = collateral;
 
-        // TODO: consider adding total collateral to event
         emit CollateralDeposit(_msgSender(), to, amount);
     }
 
@@ -246,7 +245,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
 
         uint256 factoredOwed = _factoredLoanOf[_msgSender()];
         if (factoredOwed > 0) {
-            uint24 tick = _adjustLoan(_msgSender(), factoredOwed, collateralPrior, factoredOwed, collateral);
+            uint16 tick = _adjustLoan(_msgSender(), factoredOwed, collateralPrior, factoredOwed, collateral);
             _verifyLoanHealthy(tick, _interestFactor(), false);
             // TODO: emit loan change event
         }
@@ -277,11 +276,11 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 collateral = _collateralOf[_msgSender()];
 
         uint256 factoredOwedPrior = _factoredLoanOf[_msgSender()];
-        uint24 tick;
+        uint16 tick;
 
         if (factoredOwedPrior > 0) {
-            factoredOwed += factoredOwedPrior;
-            tick = _adjustLoan(_msgSender(), factoredOwedPrior, collateral, factoredOwed, collateral);
+            tick =
+                _adjustLoan(_msgSender(), factoredOwedPrior, collateral, factoredOwed + factoredOwedPrior, collateral);
             // TODO: emit loan change event
         } else {
             tick = _addLoan(factoredOwed, collateral, _msgSender());
@@ -333,7 +332,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         emit RepayBorrow(_msgSender(), to, amount);
     }
 
-    function claimLiquidatedCollateral(uint80 liquidationKey, address to) external processingReentrancyGuard {
+    function claimLiquidatedCollateral(uint64 liquidationKey, address to) external processingReentrancyGuard {
         uint256 collateralRefund = claimableCollateral(liquidationKey, _msgSender());
         if (collateralRefund > totalClaimableCollateral) {
             collateralRefund = totalClaimableCollateral;
@@ -353,7 +352,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint112 altcoinReserve,
         int256 currencyAmountInOut,
         int256 altcoinAmountInOut,
-        uint32 blockNumber
+        uint32 timestamp
     ) external returns (uint112, uint112) {
         if (_msgSender() != pair) revert CallerNotPair();
 
@@ -361,14 +360,14 @@ contract HoyuVault is ERC4626, IHoyuVault {
             return (0, 0);
         }
 
-        LiquidationMath.ReservesChange memory reservesChange = LiquidationMath.ReservesChange(
+        ReservesChange memory reservesChange = ReservesChange(
             currencyReserve,
             altcoinReserve,
             currencyAmountInOut,
             altcoinAmountInOut,
             0,
-            blockNumber,
-            Factoring.interestFactorAt(blockNumber)
+            timestamp,
+            Factoring.interestFactorAt(timestamp)
         );
 
         return _liquidateLoans(reservesChange);
@@ -379,7 +378,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint112 currencyReserve,
         uint112 altcoinReserve,
         uint256 fractionOut,
-        uint32 blockNumber
+        uint32 timestamp
     ) external returns (uint112, uint112) {
         if (_msgSender() != pair) revert CallerNotPair();
 
@@ -387,120 +386,121 @@ contract HoyuVault is ERC4626, IHoyuVault {
             return (0, 0);
         }
 
-        LiquidationMath.ReservesChange memory reservesChange = LiquidationMath.ReservesChange(
-            currencyReserve, altcoinReserve, 0, 0, fractionOut, blockNumber, Factoring.interestFactorAt(blockNumber)
+        ReservesChange memory reservesChange = ReservesChange(
+            currencyReserve, altcoinReserve, 0, 0, fractionOut, timestamp, Factoring.interestFactorAt(timestamp)
         );
 
         return _liquidateLoans(reservesChange);
     }
 
-    function _liquidateLoans(LiquidationMath.ReservesChange memory reservesChange) private returns (uint112, uint112) {
-        if (totalFactoredLoans == 0) {
+    function _liquidateLoans(ReservesChange memory reservesChange) private returns (uint112, uint112) {
+        uint256 wordBitmap_ = wordBitmap;
+
+        // immediate exit if there are no loans
+        if (wordBitmap_ == 0) {
             return (0, 0);
         }
 
-        (uint16 minWordPos, uint8 minBitPos, uint256 factoredLoanLimit) = reservesChange.getLiquidationThresholds();
-        LiquidatedAmounts.Amounts memory liquidationAmounts = LiquidatedAmounts.create(totalFactoredLoans);
+        (uint8 minWordPos, uint8 minBitPos, uint256 factoredLoanLimit) = reservesChange.getLiquidationThresholds();
 
-        uint24 topTick;
-        uint24 liquidatingTick;
+        uint256 remainingFactoredLoans = totalFactoredLoans;
+        uint256 collateralLiquidated = 0;
+
+        // key is initially used to track range of liquidated ticks
+        uint64 key;
         {
-            uint16 wPos = maxTickWordIndex;
-            while (wPos >= minWordPos || liquidationAmounts.remainingFactoredLoans > factoredLoanLimit) {
-                uint256 word = tickBitmap[wPos];
-                uint16 bShift = 0;
-                uint8 bPos;
+            uint8 wordIndex = BitMath.mostSignificantBit(wordBitmap_);
+            uint256 word = tickBitmap[wordIndex];
+            uint8 bitIndex = BitMath.mostSignificantBit(word);
 
-                while (word > 0) {
-                    uint8 msb = BitMath.mostSignificantBit(word);
-                    bPos = msb - uint8(bShift);
+            while (true) {
+                // exit if all remaining loans are healthy
+                if (
+                    remainingFactoredLoans <= factoredLoanLimit
+                        && ((wordIndex == minWordPos && bitIndex < minBitPos) || (wordIndex < minWordPos))
+                ) {
+                    tickBitmap[wordIndex] = word;
+                    break;
+                }
 
-                    // if ((processing last word AND unprocessed bits are outside of liquidation range) OR (processing after last word)) AND loans are not above limit
-                    if (
-                        ((wPos == minWordPos && bPos < minBitPos) || (wPos < minWordPos))
-                            && liquidationAmounts.remainingFactoredLoans <= factoredLoanLimit
-                    ) {
-                        // reevaluate liquidation end tick
-                        (minWordPos, minBitPos, factoredLoanLimit) =
-                            reservesChange.postLiquidationThresholds(liquidationAmounts);
-
-                        if (
-                            ((wPos == minWordPos && bPos < minBitPos) || (wPos < minWordPos))
-                                && liquidationAmounts.remainingFactoredLoans <= factoredLoanLimit
-                        ) {
-                            // tick under evaluation is not going to be liquidated, finished
-                            break;
-                        }
+                // liquidate current tick
+                {
+                    uint16 liquidatingTick = (uint16(wordIndex) << 8) + bitIndex;
+                    if (key == 0) {
+                        key = uint32(liquidatingTick) << 16;
                     }
-
-                    liquidatingTick = _positionToTick(wPos, bPos);
-                    if (topTick == 0) {
-                        topTick = liquidatingTick;
-                    }
+                    key = (key & 0xffff0000) + liquidatingTick;
                     _tickLiquidations[liquidatingTick] =
-                        (_tickLiquidations[liquidatingTick] << 32) + reservesChange.blockNumber;
-                    liquidationAmounts.liquidate(tickFactoredLoans[liquidatingTick], tickCollateral[liquidatingTick]);
-                    bShift += 256 - msb;
-                    word <<= 256 - msb;
+                        (_tickLiquidations[liquidatingTick] << 32) + reservesChange.timestamp;
+                    remainingFactoredLoans -= tickFactoredLoans[liquidatingTick];
+                    collateralLiquidated += tickCollateral[liquidatingTick];
+                    word = BitMath.unsetBit(word, bitIndex);
                 }
 
-                if (wPos <= minWordPos && word == 0 && liquidationAmounts.remainingFactoredLoans <= factoredLoanLimit) {
-                    // reevaluate liquidation end tick if current word is fully liquidated
-                    (minWordPos, minBitPos, factoredLoanLimit) =
-                        reservesChange.postLiquidationThresholds(liquidationAmounts);
-                }
-
+                // load new word if current is fully liquidated
                 if (word == 0) {
-                    tickBitmap[wPos] = 0;
-                } else {
-                    tickBitmap[wPos] &= type(uint256).max >> (256 - minBitPos);
+                    tickBitmap[wordIndex] = 0;
+                    wordBitmap_ = BitMath.unsetBit(wordBitmap_, wordIndex);
+                    if (wordBitmap_ > 0) {
+                        wordIndex = BitMath.mostSignificantBit(wordBitmap_);
+                        word = tickBitmap[wordIndex];
+                    } else {
+                        // no more loans left
+                        break;
+                    }
                 }
 
-                // TODO: ensure wPos can not underflow, this could require ticks to start at 256
-                wPos--;
+                // retrieve next bit
+                bitIndex = BitMath.mostSignificantBit(word);
+
+                // update liquidation limits if currently healthy after last liquidation
+                if (
+                    remainingFactoredLoans <= factoredLoanLimit
+                        && ((wordIndex == minWordPos && bitIndex < minBitPos) || (wordIndex < minWordPos))
+                ) {
+                    (minWordPos, minBitPos, factoredLoanLimit) = reservesChange.postLiquidationThresholds(
+                        totalFactoredLoans - remainingFactoredLoans, collateralLiquidated
+                    );
+                }
             }
         }
 
-        if (liquidationAmounts.collateralLiquidated == 0) {
+        if (collateralLiquidated == 0) {
             return (0, 0);
         }
 
-        if (liquidationAmounts.remainingFactoredLoans > 0) {
-            uint16 newMaxWordIndex = uint16(liquidatingTick >> 8);
-            while (tickBitmap[newMaxWordIndex] == 0) {
-                newMaxWordIndex--;
-            }
-            maxTickWordIndex = newMaxWordIndex;
-        }
+        wordBitmap = wordBitmap_;
 
         uint256 currencyLiquidated;
         uint256 altcoinLiquidated;
         {
             uint256 liquidatedLoans =
-                Factoring.unfactorUp(liquidationAmounts.factoredLoansLiquidated(), reservesChange.interestFactor);
-            totalFactoredLoans = liquidationAmounts.remainingFactoredLoans;
+                Factoring.unfactorUp(totalFactoredLoans - remainingFactoredLoans, reservesChange.interestFactor);
+            totalFactoredLoans = remainingFactoredLoans;
 
             (currencyLiquidated, altcoinLiquidated) =
-                _moveLiquidationAssets(reservesChange, liquidationAmounts.collateralLiquidated, liquidatedLoans);
+                _moveLiquidationAssets(reservesChange, collateralLiquidated, liquidatedLoans);
         }
 
-        uint80 key = (uint80(reservesChange.blockNumber) << 48) + (uint48(topTick) << 24) + liquidatingTick;
-        _liquidations[key] = (currencyLiquidated << 128) + altcoinLiquidated;
+        emit Liquidation(
+            reservesChange.timestamp, uint16(key >> 16), uint16(key), currencyLiquidated, altcoinLiquidated
+        );
 
-        emit Liquidation(reservesChange.blockNumber, topTick, liquidatingTick, currencyLiquidated, altcoinLiquidated);
+        // key is expanded with liquidation timestamp to be used as liquidationKey
+        key += uint64(reservesChange.timestamp) << 32;
+        _liquidations[key] = (currencyLiquidated << 128) + altcoinLiquidated;
 
         // TODO: ensure no overflows, consider moving cast elsewhere
         return (uint112(currencyLiquidated), uint112(altcoinLiquidated));
     }
 
     function _moveLiquidationAssets(
-        LiquidationMath.ReservesChange memory reservesChange,
+        ReservesChange memory reservesChange,
         uint256 collateralLiquidated,
         uint256 liquidatedLoans
     ) private returns (uint256 pairCurrency, uint256 pairAltcoin) {
-        uint256 maxLiquidationReward = LiquidationMath.getAmountOut(
-            collateralLiquidated, reservesChange.altcoinReserve, reservesChange.currencyReserve
-        );
+        uint256 maxLiquidationReward =
+            SwapMath.getAmountOut(collateralLiquidated, reservesChange.altcoinReserve, reservesChange.currencyReserve);
 
         if (maxLiquidationReward <= liquidatedLoans) {
             pairCurrency = maxLiquidationReward;
@@ -508,7 +508,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         } else {
             pairCurrency = liquidatedLoans;
             pairAltcoin =
-                LiquidationMath.getAmountIn(pairCurrency, reservesChange.altcoinReserve, reservesChange.currencyReserve);
+                SwapMath.getAmountIn(pairCurrency, reservesChange.altcoinReserve, reservesChange.currencyReserve);
         }
 
         // TODO: avoid locking through excessive altcoin amount
@@ -520,41 +520,38 @@ contract HoyuVault is ERC4626, IHoyuVault {
         }
 
         // TODO: consider getting rid of the cast to uint112
-        IHoyuPair(pair).payForLiquidation(uint112(pairCurrency), uint112(pairAltcoin), reservesChange.blockNumber);
+        IHoyuPair(pair).payForLiquidation(uint112(pairCurrency), uint112(pairAltcoin), reservesChange.timestamp);
     }
 
-    // TODO: save intermediate values
-    // TODO: save for varying interest rate
     function _interestFactor() private view returns (uint256) {
-        return Factoring.interestFactorAt(block.number);
+        return Factoring.interestFactorAt(ts());
     }
 
-    function _addLoan(uint256 factoredLoan, uint256 collateral, address borrower) private returns (uint24 tick) {
+    function _addLoan(uint256 factoredLoan, uint256 collateral, address borrower) private returns (uint16 tick) {
         // TODO: consider removing the factoredLoan == 0 condition
-        // TODO: require(value <= type(uint32).max);
         if (collateral == 0 && factoredLoan > 0) revert InsufficientCollateralization();
 
         tick = _loanTick(factoredLoan, collateral);
 
-        _activateTick(tick, totalFactoredLoans == 0);
+        _activateTick(tick);
 
         tickFactoredLoans[tick] += factoredLoan;
         tickCollateral[tick] += collateral;
 
         totalFactoredLoans += factoredLoan;
         _factoredLoanOf[borrower] = factoredLoan;
-        _userLoanBlock[borrower] = uint32(block.number);
+        _userLoanTimestamp[borrower] = ts();
         _userLoanTick[borrower] = tick;
     }
 
     function _removeLoan(uint256 removedFactoredLoan, uint256 unlockedCollateral, address borrower) private {
-        uint24 tick = _loanTick(removedFactoredLoan, unlockedCollateral);
+        uint16 tick = _loanTick(removedFactoredLoan, unlockedCollateral);
 
         tickFactoredLoans[tick] -= removedFactoredLoan;
         tickCollateral[tick] -= unlockedCollateral;
         totalFactoredLoans -= removedFactoredLoan;
         _factoredLoanOf[borrower] = 0;
-        _userLoanBlock[borrower] = 0;
+        _userLoanTimestamp[borrower] = 0;
         _userLoanTick[borrower] = 0;
 
         _deactivateTick(tick);
@@ -566,17 +563,16 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 collateralPrior,
         uint256 factoredOwed,
         uint256 collateral
-    ) private returns (uint24 tick) {
-        // TODO: require(value <= type(uint32).max);
+    ) private returns (uint16 tick) {
         if (collateral == 0) revert InsufficientCollateralization();
 
         if (factoredOwedPrior != factoredOwed) {
             totalFactoredLoans = totalFactoredLoans - factoredOwedPrior + factoredOwed;
             _factoredLoanOf[borrower] = factoredOwed;
-            _userLoanBlock[borrower] = uint32(block.number);
+            _userLoanTimestamp[borrower] = ts();
         }
 
-        uint24 oldTick = _loanTick(factoredOwedPrior, collateralPrior);
+        uint16 oldTick = _loanTick(factoredOwedPrior, collateralPrior);
         tick = _loanTick(factoredOwed, collateral);
 
         if (oldTick == tick) {
@@ -592,7 +588,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         tickFactoredLoans[oldTick] -= factoredOwedPrior;
         tickCollateral[oldTick] -= collateralPrior;
 
-        _activateTick(tick, false);
+        _activateTick(tick);
         _deactivateTick(oldTick);
 
         tickFactoredLoans[tick] += factoredOwed;
@@ -601,22 +597,22 @@ contract HoyuVault is ERC4626, IHoyuVault {
         _userLoanTick[borrower] = tick;
     }
 
-    function _loanTick(uint256 factoredLoan, uint256 collateral) private pure returns (uint24) {
-        uint256 factoredPrice = Math.ceilDiv(factoredLoan, collateral);
-        return LiquidationMath.priceTick(factoredPrice) + LOAN_COLLATERALIZATION_TICK_OFFSET;
+    function _loanTick(uint256 factoredLoan, uint256 collateral) private pure returns (uint16) {
+        uint256 factoredPriceQ128 = Math.ceilDiv(factoredLoan << 32, collateral);
+        return TickMath.getTickAtPrice(factoredPriceQ128) + LOAN_TICK_OFFSET;
     }
 
     function _reservesTick(
         uint256 currencyReserve,
         uint256 altcoinReserve,
         uint256 interestFactor
-    ) private pure returns (uint24) {
-        uint256 reservesPrice = Q96Math.div(currencyReserve, altcoinReserve);
-        uint256 factoredReservesPrice = Q96Math.div(reservesPrice, interestFactor);
-        return LiquidationMath.priceTick(factoredReservesPrice);
+    ) private pure returns (uint16) {
+        uint256 reservesPriceQ128 = Math.mulDiv(currencyReserve, Q128.ONE, altcoinReserve);
+        uint256 factoredReservesPriceQ128 = Math.mulDiv(reservesPriceQ128, Q96.ONE, interestFactor);
+        return TickMath.getTickAtPrice(factoredReservesPriceQ128);
     }
 
-    function _verifyLoanHealthy(uint24 tick, uint256 interestFactor, bool verifyVaultHealth) private view {
+    function _verifyLoanHealthy(uint16 tick, uint256 interestFactor, bool verifyVaultHealth) private view {
         (uint112 currencyReserve, uint112 altcoinReserve,) = IHoyuPair(pair).getReserves();
 
         if (verifyVaultHealth) {
@@ -626,51 +622,38 @@ contract HoyuVault is ERC4626, IHoyuVault {
             }
         }
 
-        uint24 reservesTick = _reservesTick(currencyReserve, altcoinReserve, interestFactor);
+        uint16 reservesTick = _reservesTick(currencyReserve, altcoinReserve, interestFactor);
         if (tick >= reservesTick) revert InsufficientCollateralization();
     }
 
-    function _positionToTick(uint16 wordPos, uint8 bitPos) private pure returns (uint24 tick) {
-        tick = (uint24(wordPos) << 8) + bitPos;
-    }
+    function _activateTick(uint16 tick) private {
+        (uint8 wordIndex, uint8 bitIndex) = TickMath.tickPosition(tick);
 
-    function _activateTick(uint24 tick, bool firstLoan) private {
-        (uint16 word, uint8 bit) = LiquidationMath.tickToPosition(tick);
+        uint256 word = tickBitmap[wordIndex];
 
-        bool tickWasActive = ((tickBitmap[word] >> bit) & 1) == 1;
-
-        if (tickWasActive) {
+        if (BitMath.getBit(word, bitIndex)) {
             return;
         }
 
-        if (uint32(_tickLiquidations[tick]) >= block.number) revert LiquidationOnSameBlock();
+        if (uint32(_tickLiquidations[tick]) >= ts()) revert LiquidationOnSameTimestamp();
 
         tickFactoredLoans[tick] = 0;
         tickCollateral[tick] = 0;
 
-        tickBitmap[word] ^= (1 << (bit));
-
-        if (firstLoan || maxTickWordIndex < word) {
-            maxTickWordIndex = word;
-        }
+        tickBitmap[wordIndex] = BitMath.setBit(word, bitIndex);
+        wordBitmap = BitMath.setBit(wordBitmap, wordIndex);
     }
 
-    function _deactivateTick(uint24 tick) private {
+    function _deactivateTick(uint16 tick) private {
         if (tickFactoredLoans[tick] > 0) return;
 
-        (uint16 word, uint8 bit) = LiquidationMath.tickToPosition(tick);
+        (uint8 wordIndex, uint8 bitIndex) = TickMath.tickPosition(tick);
 
-        tickBitmap[word] &= ~(1 << (bit));
+        uint256 word = BitMath.unsetBit(tickBitmap[wordIndex], bitIndex);
+        tickBitmap[wordIndex] = word;
 
-        // no need to reevaluate maxTickWordIndex if there are no more loans
-        if (totalFactoredLoans == 0) return;
-
-        if (word == maxTickWordIndex && tickBitmap[word] == 0) {
-            uint16 newMaxWordIndex = maxTickWordIndex - 1;
-            while (tickBitmap[newMaxWordIndex] == 0) {
-                newMaxWordIndex--;
-            }
-            maxTickWordIndex = newMaxWordIndex;
+        if (word == 0) {
+            wordBitmap = BitMath.unsetBit(wordBitmap, wordIndex);
         }
     }
 
@@ -678,6 +661,6 @@ contract HoyuVault is ERC4626, IHoyuVault {
         _collateralOf[account] = 0;
         _factoredLoanOf[account] = 0;
         _userLoanTick[account] = 0;
-        _userLoanBlock[account] = 0;
+        _userLoanTimestamp[account] = 0;
     }
 }

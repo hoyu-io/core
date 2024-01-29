@@ -2,85 +2,52 @@
 pragma solidity =0.8.21;
 
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Q96Math} from "src/libraries/Q96Math.sol";
+import {Q96} from "src/libraries/Q96.sol";
+import {Q128} from "src/libraries/Q128.sol";
 import {IntMath} from "src/libraries/IntMath.sol";
 import {Factoring} from "src/libraries/Factoring.sol";
-import "src/libraries/TickMath.sol";
-import "src/libraries/LiquidatedAmounts.sol";
+import {TickMath} from "src/libraries/TickMath.sol";
+import {SwapMath} from "src/libraries/SwapMath.sol";
 
-error InsufficientReserve();
-error InsufficientLiquidity();
-error ZeroPrice();
+struct ReservesChange {
+    uint112 currencyReserve;
+    uint112 altcoinReserve;
+    int256 currencyAmountInOut;
+    int256 altcoinAmountInOut;
+    uint256 fractionOut;
+    uint32 timestamp;
+    uint256 interestFactor;
+}
 
 library LiquidationMath {
-    struct ReservesChange {
-        uint112 currencyReserve;
-        uint112 altcoinReserve;
-        int256 currencyAmountInOut;
-        int256 altcoinAmountInOut;
-        uint256 fractionOut;
-        uint32 blockNumber;
-        uint256 interestFactor;
-    }
+    error InsufficientReserve();
 
-    using LiquidatedAmounts for LiquidatedAmounts.Amounts;
-
-    uint256 public constant LOAN_LIMIT_PER_MIL = 78;
-
-    // TODO: reuse same constant value from HoyuPair
-    uint256 public constant SWAP_FEE_PER_MIL = 3;
-    uint256 public constant SWAP_TAXING_MULTIPLIER_PER_MIL = 1000 - SWAP_FEE_PER_MIL;
+    uint256 internal constant LOAN_LIMIT_PER_MIL = 102;
 
     function getLiquidationThresholds(ReservesChange memory data)
         internal
         pure
-        returns (uint16 wordPos, uint8 bitPos, uint256 factoredLoanLimit)
+        returns (uint8 wordPos, uint8 bitPos, uint256 factoredLoanLimit)
     {
         return _getLiquidationThresholds(data, data.currencyReserve, data.altcoinReserve);
     }
 
-    function _getLiquidationThresholds(
-        ReservesChange memory data,
-        uint256 currencyReserve,
-        uint256 altcoinReserve
-    ) private pure returns (uint16 wordPos, uint8 bitPos, uint256 factoredLoanLimit) {
-        int256 currencyAmountInOut = data.fractionOut > 0
-            ? -int256(uint256(Q96Math.asUint(data.fractionOut * currencyReserve)))
-            : data.currencyAmountInOut;
-        int256 altcoinAmountInOut = data.fractionOut > 0
-            ? -int256(uint256(Q96Math.asUint(data.fractionOut * altcoinReserve)))
-            : data.altcoinAmountInOut;
-        // TODO: require currencyReserve is enough to cover currencyAmountInOut;
-
-        uint256 currencyReserveWithOffset = IntMath.add(currencyReserve, currencyAmountInOut);
-        uint256 altcoinReserveWithOffset = IntMath.add(altcoinReserve, altcoinAmountInOut);
-
-        if (currencyReserveWithOffset == 0 || altcoinReserveWithOffset == 0) revert InsufficientReserve();
-
-        uint256 priceQ96 = Q96Math.div(currencyReserveWithOffset, altcoinReserveWithOffset);
-        uint256 factoredPrice = Factoring.factorQ96Down(priceQ96, data.interestFactor);
-        uint24 tick = priceTick(factoredPrice);
-        (wordPos, bitPos) = tickToPosition(tick);
-
-        factoredLoanLimit =
-            Factoring.factorDown(LOAN_LIMIT_PER_MIL * currencyReserveWithOffset / 1000, data.interestFactor);
-    }
-
     function postLiquidationThresholds(
         ReservesChange memory data,
-        LiquidatedAmounts.Amounts memory amounts
-    ) internal pure returns (uint16, uint8, uint256) {
-        uint256 loansLiquidated = Factoring.unfactorUp(amounts.factoredLoansLiquidated(), data.interestFactor);
-        uint256 collateralValue = getAmountOut(amounts.collateralLiquidated, data.altcoinReserve, data.currencyReserve);
+        uint256 factoredLoansLiquidated,
+        uint256 collateralLiquidated
+    ) internal pure returns (uint8, uint8, uint256) {
+        uint256 loansLiquidated = Factoring.unfactorUp(factoredLoansLiquidated, data.interestFactor);
+        uint256 collateralValue = SwapMath.getAmountOut(collateralLiquidated, data.altcoinReserve, data.currencyReserve);
 
         uint256 currencyFromPair;
         uint256 altcoinToPair;
         if (collateralValue <= loansLiquidated) {
             currencyFromPair = collateralValue;
-            altcoinToPair = amounts.collateralLiquidated;
+            altcoinToPair = collateralLiquidated;
         } else {
             currencyFromPair = loansLiquidated;
-            altcoinToPair = getAmountIn(loansLiquidated, data.altcoinReserve, data.currencyReserve);
+            altcoinToPair = SwapMath.getAmountIn(loansLiquidated, data.altcoinReserve, data.currencyReserve);
         }
 
         return _getLiquidationThresholds(
@@ -88,39 +55,29 @@ library LiquidationMath {
         );
     }
 
-    function getAmountIn(
-        uint256 amountOut,
-        uint256 reserveIn,
-        uint256 reserveOut
-    ) internal pure returns (uint256 amountIn) {
-        if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
-        if (amountOut >= reserveOut) revert InsufficientReserve();
-        uint256 numerator = reserveIn * amountOut * 1000;
-        uint256 denominator = (reserveOut - amountOut) * SWAP_TAXING_MULTIPLIER_PER_MIL;
-        amountIn = Math.ceilDiv(numerator, denominator);
-    }
+    function _getLiquidationThresholds(
+        ReservesChange memory data,
+        uint256 currencyReserve,
+        uint256 altcoinReserve
+    ) private pure returns (uint8 wordPos, uint8 bitPos, uint256 factoredLoanLimit) {
+        int256 currencyAmountInOut = data.fractionOut > 0
+            ? -int256((data.fractionOut * currencyReserve) >> Q96.FRACTION_BITS)
+            : data.currencyAmountInOut;
+        int256 altcoinAmountInOut = data.fractionOut > 0
+            ? -int256((data.fractionOut * altcoinReserve) >> Q96.FRACTION_BITS)
+            : data.altcoinAmountInOut;
 
-    function getAmountOut(
-        uint256 amountIn,
-        uint256 reserveIn,
-        uint256 reserveOut
-    ) internal pure returns (uint256 amountOut) {
-        if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
-        uint256 amountInWithFee = amountIn * SWAP_TAXING_MULTIPLIER_PER_MIL;
-        uint256 numerator = amountInWithFee * reserveOut;
-        uint256 denominator = reserveIn * 1000 + amountInWithFee;
-        amountOut = numerator / denominator;
-    }
+        uint256 currencyReserveWithOffset = IntMath.add(currencyReserve, currencyAmountInOut);
+        uint256 altcoinReserveWithOffset = IntMath.add(altcoinReserve, altcoinAmountInOut);
 
-    function priceTick(uint256 factoredPrice) internal pure returns (uint24 tick) {
-        if (factoredPrice == 0) revert ZeroPrice();
+        if (currencyReserveWithOffset == 0 || altcoinReserveWithOffset == 0) revert InsufficientReserve();
 
-        uint256 sqrtFactoredPrice = Q96Math.sqrt(factoredPrice);
-        tick = TickMath.getTickAtSqrtRatio(uint160(sqrtFactoredPrice));
-    }
+        uint256 priceQ128 = Math.mulDiv(currencyReserveWithOffset, Q128.ONE, altcoinReserveWithOffset);
+        uint256 factoredPriceQ128 = Math.mulDiv(priceQ128, Q96.ONE, data.interestFactor);
+        uint16 tick = TickMath.getTickAtPrice(factoredPriceQ128);
+        (wordPos, bitPos) = TickMath.tickPosition(tick);
 
-    function tickToPosition(uint24 tick) internal pure returns (uint16 wordPos, uint8 bitPos) {
-        wordPos = uint16(tick >> 8);
-        bitPos = uint8(tick & 0xff);
+        factoredLoanLimit =
+            Factoring.factorDown(LOAN_LIMIT_PER_MIL * currencyReserveWithOffset / 1000, data.interestFactor);
     }
 }
