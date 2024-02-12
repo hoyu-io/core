@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 library IntMath {
     /// @notice Lowest supported signed parameter is type(int256).min + 1

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
 interface IHoyuPair {
     event Mint(address indexed sender, uint256 currencyAmount, uint256 altcoinAmount);
@@ -56,7 +56,6 @@ interface IHoyuPair {
     function userBurnRate(address user) external view returns (uint256 rate);
 
     function mint(address to) external returns (uint256 liquidity);
-    // TODO: maybe keep the uniswap signature that returns (uint256 currencyAmount, uint256 altcoinAmount) even though immediate values are always 0 due to long burn
     function burn(address to) external;
     function swap(uint256 currencyAmountOut, uint256 altcoinAmountOut, address to, bytes calldata data) external;
     function skim(address to) external;

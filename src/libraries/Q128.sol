@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {BitMath} from "src/libraries/BitMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {BitMath} from "./BitMath.sol";
 
 library Q128 {
     /// @dev Q128 fraction representing 1

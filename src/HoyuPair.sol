@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Q96} from "src/libraries/Q96.sol";
-import {IntMath} from "src/libraries/IntMath.sol";
-import {SwapMath} from "src/libraries/SwapMath.sol";
-import {timestamp as ts} from "src/libraries/Timestamp.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Q96} from "./libraries/Q96.sol";
+import {IntMath} from "./libraries/IntMath.sol";
+import {SwapMath} from "./libraries/SwapMath.sol";
+import {timestamp as ts} from "./utils/Timestamp.sol";
 import {ReentrancyGuard} from "./utils/ReentrancyGuard.sol";
-import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {HoyuBurnRewardStore} from "./HoyuBurnRewardStore.sol";
 import {IHoyuPair} from "./interfaces/IHoyuPair.sol";
 import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
 import {IUniswapV2Callee} from "./interfaces/IUniswapV2Callee.sol";
-import {HoyuBurnRewardStore} from "./HoyuBurnRewardStore.sol";
 
 contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3 * 2 ** 16;
@@ -56,6 +55,11 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
         _;
     }
 
+    modifier onlyVault() {
+        if (_msgSender() != vault) revert CallerNotVault();
+        _;
+    }
+
     constructor(address currency, address altcoin, address vault_, address factory_) ERC20("Hoyu Dex", "HOYD") {
         token0 = currency;
         token1 = altcoin;
@@ -66,8 +70,8 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
 
     function mint(address to) external nonReentrant processBurns returns (uint256 liquidity) {
         (uint112 currencyReserve, uint112 altcoinReserve,) = getReserves();
-        uint256 currencyBalance = IERC20(token0).balanceOf(address(this));
-        uint256 altcoinBalance = IERC20(token1).balanceOf(address(this));
+        uint256 currencyBalance = _currencyBalance();
+        uint256 altcoinBalance = _altcoinBalance();
         uint256 currencyAmount = currencyBalance - currencyReserve;
         uint256 altcoinAmount = altcoinBalance - altcoinReserve;
 
@@ -129,7 +133,6 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
         _processBurnUntil(timestamp);
     }
 
-    // TODO: make sure any needed Sync events are always emitted
     function _processBurnUntil(uint32 toTimestamp) private {
         if (toTimestamp > ts()) revert FutureTime();
 
@@ -168,7 +171,7 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
             _update(currencyReserve, altcoinReserve, toTimestamp);
         } else {
             (uint112 currencyLiquidated, uint112 altcoinLiquidated) =
-                IHoyuVault(vault).liquidateLoansByOffset(currencyReserve, altcoinReserve, 0, 0, toTimestamp);
+                _liquidateByOffset(currencyReserve, altcoinReserve, 0, 0, toTimestamp);
             if (currencyLiquidated > 0 || altcoinLiquidated > 0 || currencyBurned > 0 || altcoinBurned > 0) {
                 _update(currencyReserve - currencyLiquidated, altcoinReserve + altcoinLiquidated, toTimestamp);
             }
@@ -238,8 +241,8 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
             IUniswapV2Callee(to).uniswapV2Call(_msgSender(), currencyAmountOut, altcoinAmountOut, data);
         }
 
-        uint256 currencyBalance = IERC20(token0).balanceOf(address(this));
-        uint256 altcoinBalance = IERC20(token1).balanceOf(address(this));
+        uint256 currencyBalance = _currencyBalance();
+        uint256 altcoinBalance = _altcoinBalance();
 
         uint256 currencyAmountIn = currencyBalance > currencyReserve - currencyAmountOut
             ? currencyBalance - (currencyReserve - currencyAmountOut)
@@ -252,14 +255,12 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
         {
             int256 currencyAmountInOut = IntMath.sub(currencyAmountIn, currencyAmountOut);
             int256 altcoinAmountInOut = IntMath.sub(altcoinAmountIn, altcoinAmountOut);
-            (uint112 currencyLiquidated, uint112 altcoinLiquidated) = IHoyuVault(vault).liquidateLoansByOffset(
-                currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, ts()
-            );
+            (uint112 currencyLiquidated, uint112 altcoinLiquidated) =
+                _liquidateByOffset(currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, ts());
 
             if (currencyLiquidated > 0) {
                 currencyReserve -= currencyLiquidated;
                 altcoinReserve += altcoinLiquidated;
-                // TODO: consider retrieving actual amounts again for ensured accuracy
                 currencyBalance -= currencyLiquidated;
                 altcoinBalance += altcoinLiquidated;
             }
@@ -299,29 +300,30 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
     function skim(address to) external nonReentrant processBurns {
         address token0_ = token0; // gas savings
         address token1_ = token1; // gas savings
-        SafeERC20.safeTransfer(IERC20(token0_), to, IERC20(token0_).balanceOf(address(this)) - _currencyReserve);
-        SafeERC20.safeTransfer(IERC20(token1_), to, IERC20(token1_).balanceOf(address(this)) - _altcoinReserve);
+        SafeERC20.safeTransfer(IERC20(token0_), to, _currencyBalance() - _currencyReserve);
+        SafeERC20.safeTransfer(IERC20(token1_), to, _altcoinBalance() - _altcoinReserve);
     }
 
     function sync() external nonReentrant processBurns {
-        uint256 currencyBalance = IERC20(token0).balanceOf(address(this));
-        uint256 altcoinBalance = IERC20(token1).balanceOf(address(this));
+        uint256 currencyBalance = _currencyBalance();
+        uint256 altcoinBalance = _altcoinBalance();
         (uint112 currencyReserve, uint112 altcoinReserve,) = getReserves();
         int256 currencyAmountInOut = IntMath.sub(currencyBalance, currencyReserve);
         int256 altcoinAmountInOut = IntMath.sub(altcoinBalance, altcoinReserve);
 
-        (uint112 currencyLiquidated, uint112 altcoinLiquidated) = IHoyuVault(vault).liquidateLoansByOffset(
-            currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, ts()
-        );
+        (uint112 currencyLiquidated, uint112 altcoinLiquidated) =
+            _liquidateByOffset(currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, ts());
 
-        // TODO: consider retrieving actual amounts again for ensured accuracy
         _update(currencyBalance - currencyLiquidated, altcoinBalance + altcoinLiquidated, ts());
     }
 
     // this function depends on the calling vault to make sure that nothing else will need to be liquidated due to the price going down, and that reentrancy will be prevented
-    function payForLiquidation(uint112 currencyPayout, uint112 altcoinLiquidated, uint32 timestamp) external {
-        if (_msgSender() != vault) revert CallerNotVault();
-
+    // calling flow needs to make sure to call sync at the end
+    function payForLiquidation(
+        uint112 currencyPayout,
+        uint112 altcoinLiquidated,
+        uint32 timestamp
+    ) external onlyVault {
         (uint112 remainingCurrencyOffset, uint112 remainingAltcoinOffset) = _effectiveVirtualOffsets(timestamp);
         _virtualCurrencyOffset = currencyPayout + remainingCurrencyOffset;
         _virtualAltcoinOffset = altcoinLiquidated + remainingAltcoinOffset;
@@ -329,19 +331,14 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
 
         SafeERC20.safeTransfer(IERC20(token0), _msgSender(), currencyPayout);
         emit Swap(_msgSender(), 0, altcoinLiquidated, currencyPayout, 0, _msgSender());
-        // TODO: confirm whether sync could be needed here
     }
 
-    function lockAndProcessBurn() external {
-        if (_msgSender() != vault) revert CallerNotVault();
-
+    function lockAndProcessBurn() external onlyVault {
         _nonReentrantLock();
         _processBurnUntil(ts());
     }
 
-    function unlock() external {
-        if (_msgSender() != vault) revert CallerNotVault();
-
+    function unlock() external onlyVault {
         _nonReentrantUnlock();
     }
 
@@ -366,7 +363,6 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
     }
 
     function _update(uint256 currencyBalance, uint256 altcoinBalance, uint32 timestamp) private {
-        // TODO: consider changing currencyBalance and altcoinBalance parameters to uint112 to avoid needing the require and cast
         if (currencyBalance > type(uint112).max || altcoinBalance > type(uint112).max) revert Overflow();
         _currencyReserve = uint112(currencyBalance);
         _altcoinReserve = uint112(altcoinBalance);
@@ -405,6 +401,26 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
             altcoinReserve - uint112(altcoinPayout),
             currencyPayout,
             altcoinPayout
+        );
+    }
+
+    function _currencyBalance() private view returns (uint256) {
+        return IERC20(token0).balanceOf(address(this));
+    }
+
+    function _altcoinBalance() private view returns (uint256) {
+        return IERC20(token1).balanceOf(address(this));
+    }
+
+    function _liquidateByOffset(
+        uint112 currencyReserve,
+        uint112 altcoinReserve,
+        int256 currencyAmountInOut,
+        int256 altcoinAmountInOut,
+        uint32 timestamp
+    ) private returns (uint112 currencyLiquidated, uint112 altcoinLiquidated) {
+        return IHoyuVault(vault).liquidateLoansByOffset(
+            currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, timestamp
         );
     }
 }

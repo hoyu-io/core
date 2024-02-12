@@ -11,16 +11,21 @@ Smart contracts in this repo allow creating linked trading markets (of the uniV2
   -  Automates liquidation processes, which are triggered during specific events such as swaps and syncs on the trading market side.
 
 ## License
+
 This project is licensed under the [GPL-3.0 License](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
 ## Manual Deployment
+
 Take the following steps to manually deploy the required infrastructure:
   1.  Deploy the HoyuPairDeployer contract
   1.  Deploy the HoyuVaultDeployer contract
   1.  Deploy the HoyuFactory contract, use the addresses of HoyuPairDeployer and HoyuVaultDeployer as parameters
-  1.  Call transferOwnership on HoyuPairDeployer, use address of HoyuFactory as parameter
-  1.  Call transferOwnership on HoyuVaultDeployer, use address of HoyuFactory as parameter
+  1.  Call setFactory on HoyuPairDeployer, use address of HoyuFactory as parameter
+  1.  Call setFactory on HoyuVaultDeployer, use address of HoyuFactory as parameter
 
+## Known limitations
+
+Hoyu does not support and should not be used with tokens that can have a total supply in excess of 2^112.
 
 ## Important Note
 

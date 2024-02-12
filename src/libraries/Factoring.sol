@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Q96} from "src/libraries/Q96.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Q96} from "./Q96.sol";
 
 library Factoring {
     uint256 internal constant INTEREST_RATE = 79228162865149129476592432509; // multiplier of ~1.000000004429 per second, 15% yearly interest

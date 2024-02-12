@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
-
-interface IHoyuVault is IERC4626 {
+interface IHoyuVault {
     event CollateralDeposit(address indexed sender, address indexed to, uint256 amount);
     event CollateralWithdraw(address indexed sender, address indexed to, uint256 amount);
     event Borrow(address indexed sender, address indexed to, uint256 amount);
@@ -18,11 +16,9 @@ interface IHoyuVault is IERC4626 {
 
     error CallerNotPair();
     error CallerNotFactory();
-    error InsufficientAssets();
-    error InsufficientShares();
+    error InsufficientFirstDeposit();
     error InsufficientCollateral();
     error InsufficientCurrency();
-    error InsufficientLoan();
     error NoLoan();
     error ExcessiveAltcoinAmount();
     error InsufficientCollateralization();
@@ -31,6 +27,7 @@ interface IHoyuVault is IERC4626 {
     error NoClaimableCollateral();
     error UnclaimedCollateral();
     error LoanLiquidated();
+    error RemainingLoanTooSmall();
 
     function INTEREST_RATE() external pure returns (uint256);
     function MIN_FLAT_BORROW_FEE() external pure returns (uint256);
@@ -58,7 +55,7 @@ interface IHoyuVault is IERC4626 {
 
     function depositCollateral(uint256 amount, address to) external;
     function withdrawCollateral(uint256 amount, address to) external;
-    function takeOutLoan(uint256 amount, address to) external;
+    function takeOutLoan(uint256 amount, address to, bytes calldata data) external;
     function repayLoan(uint256 amount, address to) external;
     function claimLiquidatedCollateral(uint64 liquidationKey, address to) external;
 

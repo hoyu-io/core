@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
 // Modified from PaulRBerg prb-math (https://github.com/PaulRBerg/prb-math/blob/57667c5113d800fdcf6fd13966dbd84c6b79de70/src/ud60x18/Math.sol)
 
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 library Q96 {
     uint8 internal constant FRACTION_BITS = 96;

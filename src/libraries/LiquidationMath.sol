@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Q96} from "src/libraries/Q96.sol";
-import {Q128} from "src/libraries/Q128.sol";
-import {IntMath} from "src/libraries/IntMath.sol";
-import {Factoring} from "src/libraries/Factoring.sol";
-import {TickMath} from "src/libraries/TickMath.sol";
-import {SwapMath} from "src/libraries/SwapMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Q96} from "./Q96.sol";
+import {Q128} from "./Q128.sol";
+import {IntMath} from "./IntMath.sol";
+import {Factoring} from "./Factoring.sol";
+import {TickMath} from "./TickMath.sol";
+import {SwapMath} from "./SwapMath.sol";
 
 struct ReservesChange {
     uint112 currencyReserve;

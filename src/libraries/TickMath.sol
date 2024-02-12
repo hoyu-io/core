@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity =0.8.21;
+pragma solidity ^0.8.21;
 
-// Modified from Uniswap v2-periphery (https://github.com/Uniswap/v2-periphery/blob/master/contracts/libraries/UniswapV2Library.sol)
+// Modified from Uniswap v3-core (https://github.com/Uniswap/v3-core/blob/main/contracts/libraries/TickMath.sol)
 
-import {Q128} from "src/libraries/Q128.sol";
+import {Q128} from "./Q128.sol";
 
 library TickMath {
     /// @notice Calculates an uint16 tick for a given Q128.128 price
@@ -58,64 +58,64 @@ library TickMath {
         if (msb >= 128) r = ratio >> (msb - 127);
         else r = ratio << (127 - msb);
 
-        int256 log_2 = (int256(msb) - 128) << 64;
+        int256 log2_ = (int256(msb) - 128) << 64;
 
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(63, f))
+            log2_ := or(log2_, shl(63, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(62, f))
+            log2_ := or(log2_, shl(62, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(61, f))
+            log2_ := or(log2_, shl(61, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(60, f))
+            log2_ := or(log2_, shl(60, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(59, f))
+            log2_ := or(log2_, shl(59, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(58, f))
+            log2_ := or(log2_, shl(58, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(57, f))
+            log2_ := or(log2_, shl(57, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(56, f))
+            log2_ := or(log2_, shl(56, f))
             r := shr(f, r)
         }
         assembly {
             r := shr(127, mul(r, r))
             let f := shr(128, r)
-            log_2 := or(log_2, shl(55, f))
+            log2_ := or(log2_, shl(55, f))
         }
 
-        int256 log_sqrt1003 = log_2 * 9444732965739290427392; // 128.128 number
-        int16 intTick = int16(log_sqrt1003 >> 128);
+        int256 logSqrt100271 = log2_ * 9444732965739290427392; // 128.128 number
+        int16 intTick = int16(logSqrt100271 >> 128);
 
         unchecked {
             tick = uint16(intTick - type(int16).min);
