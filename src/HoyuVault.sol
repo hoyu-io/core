@@ -11,18 +11,19 @@ import {BitMath} from "./libraries/BitMath.sol";
 import {SwapMath} from "./libraries/SwapMath.sol";
 import {ReservesChange, LiquidationMath} from "./libraries/LiquidationMath.sol";
 import {timestamp as ts} from "./utils/Timestamp.sol";
+import {ReentrancyGuard} from "./utils/ReentrancyGuard.sol";
 import {IHoyuPair} from "./interfaces/IHoyuPair.sol";
 import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
 import {IHoyuFactory} from "./interfaces/IHoyuFactory.sol";
 import {IHoyuCallee} from "./interfaces/IHoyuCallee.sol";
 
-contract HoyuVault is ERC4626, IHoyuVault {
+contract HoyuVault is ERC4626, IHoyuVault, ReentrancyGuard {
     using LiquidationMath for ReservesChange;
 
     uint256 public constant INTEREST_RATE = Factoring.INTEREST_RATE;
-    uint256 public constant MIN_FLAT_BORROW_FEE = 5000000;
+    uint256 public constant MIN_FLAT_BORROW_FEE = 5e6;
     uint256 public constant BORROW_FEE_PER_MIL = 5;
-    uint256 public constant MINIMUM_SHARES = 10 ** 3;
+    uint256 public constant MINIMUM_SHARES = 1000;
     uint256 public constant BORROW_LIMIT_PER_MIL = 100;
     uint16 public constant LOAN_TICK_OFFSET = 41; // ~89.5% ltv
 
@@ -157,14 +158,14 @@ contract HoyuVault is ERC4626, IHoyuVault {
     function deposit(
         uint256 assets,
         address receiver
-    ) public override(ERC4626) processingReentrancyGuard returns (uint256) {
+    ) public override(ERC4626) processingReentrancyGuard nonReentrant returns (uint256) {
         return super.deposit(assets, receiver);
     }
 
     function mint(
         uint256 shares,
         address receiver
-    ) public override(ERC4626) processingReentrancyGuard returns (uint256) {
+    ) public override(ERC4626) processingReentrancyGuard nonReentrant returns (uint256) {
         return super.mint(shares, receiver);
     }
 
@@ -172,7 +173,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 shares,
         address receiver,
         address owner
-    ) public override(ERC4626) processingReentrancyGuard returns (uint256) {
+    ) public override(ERC4626) processingReentrancyGuard nonReentrant returns (uint256) {
         return super.redeem(shares, receiver, owner);
     }
 
@@ -180,7 +181,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         uint256 assets,
         address receiver,
         address owner
-    ) public override(ERC4626) processingReentrancyGuard returns (uint256) {
+    ) public override(ERC4626) processingReentrancyGuard nonReentrant returns (uint256) {
         return super.withdraw(assets, receiver, owner);
     }
 
@@ -229,13 +230,22 @@ contract HoyuVault is ERC4626, IHoyuVault {
         emit CollateralDeposit(_msgSender(), to, amount);
     }
 
-    function withdrawCollateral(uint256 amount, address to) external processingReentrancyGuard {
+    function withdrawCollateral(uint256 amount, address to, bytes calldata data) external {
+        IHoyuPair(pair).processBurnUntil(ts());
+
+        SafeERC20.safeTransfer(IERC20(altcoin), to, amount);
+
+        if (data.length > 0) {
+            IHoyuCallee(to).hoyuCall(_msgSender(), amount, data);
+        }
+
         if (_isLiquidated(_msgSender())) revert LoanLiquidated();
 
         uint256 collateralPrior = _collateralOf[_msgSender()];
         if (collateralPrior < amount) revert InsufficientCollateral();
 
         uint256 collateral = collateralPrior - amount;
+        _collateralOf[_msgSender()] = collateral;
 
         uint256 factoredOwed = _factoredLoanOf[_msgSender()];
         if (factoredOwed > 0) {
@@ -245,17 +255,11 @@ contract HoyuVault is ERC4626, IHoyuVault {
             _verifyLoanHealthy(tick, _interestFactor(), false);
         }
 
-        _collateralOf[_msgSender()] = collateral;
-
-        SafeERC20.safeTransfer(IERC20(altcoin), to, amount);
-
         emit CollateralWithdraw(_msgSender(), to, amount);
     }
 
-    function takeOutLoan(uint256 amount, address to, bytes calldata data) external {
+    function takeOutLoan(uint256 amount, address to, bytes calldata data) external nonReentrant {
         IHoyuPair(pair).processBurnUntil(ts());
-
-        if (_isLiquidated(_msgSender())) revert LoanLiquidated();
 
         uint256 fee = Math.max(MIN_FLAT_BORROW_FEE, Math.mulDiv(amount, BORROW_FEE_PER_MIL, 1000, Math.Rounding.Ceil));
 
@@ -272,13 +276,16 @@ contract HoyuVault is ERC4626, IHoyuVault {
         }
 
         SafeERC20.safeTransfer(IERC20(asset()), to, amount);
-        uint256 interestFactor = _interestFactor();
-        uint256 factoredOwed = Factoring.factorUp(amount + fee, interestFactor);
-        totalFactoredLoans += factoredOwed;
 
         if (data.length > 0) {
             IHoyuCallee(to).hoyuCall(_msgSender(), amount, data);
         }
+
+        if (_isLiquidated(_msgSender())) revert LoanLiquidated();
+
+        uint256 interestFactor = _interestFactor();
+        uint256 factoredOwed = Factoring.factorUp(amount + fee, interestFactor);
+        totalFactoredLoans += factoredOwed;
 
         uint256 collateral = _collateralOf[_msgSender()];
         uint256 factoredPrior = _factoredLoanOf[_msgSender()];
@@ -294,7 +301,7 @@ contract HoyuVault is ERC4626, IHoyuVault {
         emit Borrow(_msgSender(), to, amount);
     }
 
-    function repayLoan(uint256 amount, address to) external processingReentrancyGuard {
+    function repayLoan(uint256 amount, address to) external processingReentrancyGuard nonReentrant {
         if (_isLiquidated(to)) revert LoanLiquidated();
 
         uint256 factoredOwedPrior = _factoredLoanOf[to];

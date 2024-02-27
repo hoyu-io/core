@@ -15,7 +15,7 @@ import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
 import {IUniswapV2Callee} from "./interfaces/IUniswapV2Callee.sol";
 
 contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
-    uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3 * 2 ** 16;
+    uint256 public constant MINIMUM_LIQUIDITY = 1000 * 2 ** 16;
     uint256 public constant LP_MULTIPLIER = 2 ** 32;
     uint8 public constant BURN_INTERVALS = 14;
     uint16 public constant BURN_INTERVAL_LENGTH = 12 hours;
@@ -60,11 +60,11 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
         _;
     }
 
-    constructor(address currency, address altcoin, address vault_, address factory_) ERC20("Hoyu Dex", "HOYD") {
+    constructor(address currency, address altcoin, address vault_) ERC20("Hoyu Dex", "HOYD") {
         token0 = currency;
         token1 = altcoin;
         vault = vault_;
-        factory = factory_;
+        factory = _msgSender();
         burnRewardStore = address(new HoyuBurnRewardStore(currency, altcoin));
     }
 
@@ -93,6 +93,7 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
     function burn(address to) external nonReentrant processBurns {
         if (userBurnExpiry[to] > ts()) revert BurnAlreadyActive();
 
+        // burn ending at the end of last interval
         uint32 burnEnd = (ts() / BURN_INTERVAL_LENGTH + BURN_INTERVALS) * BURN_INTERVAL_LENGTH;
         uint32 burnDuration = burnEnd - ts();
         uint256 burnRate = (balanceOf(address(this)) - burnReserve) / burnDuration;
@@ -418,7 +419,7 @@ contract HoyuPair is ERC20, IHoyuPair, ReentrancyGuard {
         int256 currencyAmountInOut,
         int256 altcoinAmountInOut,
         uint32 timestamp
-    ) private returns (uint112 currencyLiquidated, uint112 altcoinLiquidated) {
+    ) private returns (uint112, uint112) {
         return IHoyuVault(vault).liquidateLoansByOffset(
             currencyReserve, altcoinReserve, currencyAmountInOut, altcoinAmountInOut, timestamp
         );

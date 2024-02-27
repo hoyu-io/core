@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^0.8.21;
 
+import {HoyuPair} from "./HoyuPair.sol";
 import {IHoyuFactory} from "./interfaces/IHoyuFactory.sol";
 import {IHoyuVault} from "./interfaces/IHoyuVault.sol";
-import {IHoyuPairDeployer} from "./interfaces/IHoyuPairDeployer.sol";
 import {IHoyuVaultDeployer} from "./interfaces/IHoyuVaultDeployer.sol";
 
 contract HoyuFactory is IHoyuFactory {
-    address private immutable _pairDeployer;
     address private immutable _vaultDeployer;
 
     mapping(address => mapping(address => address)) public getPair;
@@ -16,8 +15,7 @@ contract HoyuFactory is IHoyuFactory {
     address public hoyuToken;
     address private immutable _creator;
 
-    constructor(address pairDeployer, address vaultDeployer) {
-        _pairDeployer = pairDeployer;
+    constructor(address vaultDeployer) {
         _vaultDeployer = vaultDeployer;
         _creator = msg.sender;
     }
@@ -35,7 +33,7 @@ contract HoyuFactory is IHoyuFactory {
         bytes32 salt = keccak256(abi.encodePacked(currency, altcoin));
 
         address vault = IHoyuVaultDeployer(_vaultDeployer).deploy(salt, currency, altcoin);
-        pair = IHoyuPairDeployer(_pairDeployer).deploy(salt, currency, altcoin, vault);
+        pair = address(new HoyuPair{salt: salt}(currency, altcoin, vault));
         IHoyuVault(vault).initialize(pair);
 
         getPair[currency][altcoin] = pair;

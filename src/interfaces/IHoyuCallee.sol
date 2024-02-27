@@ -2,5 +2,5 @@
 pragma solidity ^0.8.21;
 
 interface IHoyuCallee {
-    function hoyuCall(address sender, uint256 loanAmount, bytes calldata data) external;
+    function hoyuCall(address sender, uint256 amount, bytes calldata data) external;
 }

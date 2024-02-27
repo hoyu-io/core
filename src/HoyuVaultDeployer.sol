@@ -20,6 +20,7 @@ contract HoyuVaultDeployer is IHoyuVaultDeployer {
         vault = address(new HoyuVault{salt: salt}(currency, altcoin, msg.sender, _name(currency), _symbol(currency)));
     }
 
+    // only meant to be used once during initial factory deployment to set owner to factory address
     function setFactory(address factory) external onlyFactory {
         _factory = factory;
     }

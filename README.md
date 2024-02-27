@@ -17,10 +17,8 @@ This project is licensed under the [GPL-3.0 License](https://www.gnu.org/license
 ## Manual Deployment
 
 Take the following steps to manually deploy the required infrastructure:
-  1.  Deploy the HoyuPairDeployer contract
   1.  Deploy the HoyuVaultDeployer contract
-  1.  Deploy the HoyuFactory contract, use the addresses of HoyuPairDeployer and HoyuVaultDeployer as parameters
-  1.  Call setFactory on HoyuPairDeployer, use address of HoyuFactory as parameter
+  1.  Deploy the HoyuFactory contract, use the addresses of HoyuVaultDeployer as parameter
   1.  Call setFactory on HoyuVaultDeployer, use address of HoyuFactory as parameter
 
 ## Known limitations

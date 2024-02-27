@@ -54,7 +54,7 @@ interface IHoyuVault {
     function claimableCollateral(uint64 liquidationKey, address account) external view returns (uint256);
 
     function depositCollateral(uint256 amount, address to) external;
-    function withdrawCollateral(uint256 amount, address to) external;
+    function withdrawCollateral(uint256 amount, address to, bytes calldata data) external;
     function takeOutLoan(uint256 amount, address to, bytes calldata data) external;
     function repayLoan(uint256 amount, address to) external;
     function claimLiquidatedCollateral(uint64 liquidationKey, address to) external;

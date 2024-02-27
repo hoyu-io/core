@@ -5,9 +5,9 @@ import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeE
 import {IHoyuBurnRewardStore} from "./interfaces/IHoyuBurnRewardStore.sol";
 
 contract HoyuBurnRewardStore is IHoyuBurnRewardStore {
-    address private _pair;
-    address private _currency;
-    address private _altcoin;
+    address private immutable _pair;
+    address private immutable _currency;
+    address private immutable _altcoin;
 
     constructor(address currency, address altcoin) {
         _pair = msg.sender;
