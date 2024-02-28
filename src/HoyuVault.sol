@@ -24,8 +24,8 @@ contract HoyuVault is ERC4626, IHoyuVault, ReentrancyGuard {
     uint256 public constant MIN_FLAT_BORROW_FEE = 5e6;
     uint256 public constant BORROW_FEE_PER_MIL = 5;
     uint256 public constant MINIMUM_SHARES = 1000;
-    uint256 public constant BORROW_LIMIT_PER_MIL = 100;
-    uint16 public constant LOAN_TICK_OFFSET = 41; // ~89.5% ltv
+    uint256 public constant BORROW_LIMIT_PER_MIL = 300;
+    uint16 public constant LOAN_TICK_OFFSET = 134; // ~69.6% ltv
 
     address public immutable factory;
     address public immutable altcoin;

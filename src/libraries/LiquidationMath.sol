@@ -22,7 +22,7 @@ struct ReservesChange {
 library LiquidationMath {
     error InsufficientReserve();
 
-    uint256 internal constant LOAN_LIMIT_PER_MIL = 102;
+    uint256 internal constant LOAN_LIMIT_PER_MIL = 302;
 
     function getLiquidationThresholds(ReservesChange memory data)
         internal
